@@ -1,8 +1,23 @@
+"""
+High-level DesertFox OSINT & Exposure Engine (v3.0 Architecture).
+Coordinates:
+1. FIQA (Face Image Quality Assessment & Blur Rejection)
+2. ArcFace 512-d unit-hypersphere embedding extraction (ONNX or fallback)
+3. SCRFD multi-face detection with 5-point landmark alignment (ONNX or fallback)
+4. Multi-Hash perceptual fingerprint cascade (pHash + dHash + aHash)
+5. Advanced Voronoi space-partitioned vector indexing
+6. Forensic OSINT & EXIF metadata extraction
+7. Zero-Knowledge Opt-Out (ZKO) cryptographic filtering
+8. BK-Tree perceptual near-duplicate filtering
+"""
+
 import os
 import logging
+import re
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
+import requests
 from PIL import Image
 
 from desertfox.core.embedder import BaseEmbedder, VisualFeatureEmbedder
@@ -82,12 +97,10 @@ class DesertFoxEngine:
         detector: Optional[BaseDetector] = None,
         config: Optional[EngineConfig] = None,
     ):
-        # Apply configuration (use provided config or defaults)
         self.config = config or EngineConfig()
         self.vector_store_path = vector_store_path or self.config.vector_store_path
         self.similarity_threshold = self.config.similarity_threshold
 
-        # Auto-detect ONNX models or use provided/fallback backends
         if embedder and detector:
             self.embedder = embedder
             self.detector = detector
@@ -107,7 +120,6 @@ class DesertFoxEngine:
         self.async_harvester = AsyncMediaHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
 
-        # Optional FAISS High-Speed Vector Index
         self.faiss_index = None
         if self.config.use_faiss and FAISS_AVAILABLE and FaissVectorIndex is not None:
             try:
@@ -134,18 +146,12 @@ class DesertFoxEngine:
         enforce_fiqa: bool = True,
         only_enrolled: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Validates quality with FIQA, detects & crops face, checks opt-out table,
-        extracts multi-hash fingerprint and 512-d embedding, and indexes the record.
-        """
         meta = metadata or {}
 
-        # 1. Forensic EXIF & GPS Extraction
         forensics = ForensicMetadataExtractor.extract_exif(image)
         if forensics.get("has_exif"):
             meta["forensics"] = forensics
 
-        # 2. Multi-Hash Fingerprint Cascade — reject near-duplicates before detection and embedding
         hashes = MultiPerceptualHasher.compute_cascade_fingerprint(image)
         meta["fingerprint"] = hashes
         dhash = hashes.get("dhash")
@@ -161,16 +167,12 @@ class DesertFoxEngine:
                     "fingerprint": hashes["composite"],
                 }
 
-        # 3. Face Detection & Alignment
         faces = self.detector.detect_faces(image)
         if faces:
             cropped = self.detector.crop_and_align(image, faces[0])
-            face_bbox = faces[0].bbox
         else:
             cropped = image.resize((112, 112))
-            face_bbox = (0, 0, image.width, image.height)
 
-        # 4. Face Image Quality Assessment (FIQA)
         fiqa = FaceQualityAssessment.evaluate_quality(cropped)
         meta["fiqa"] = fiqa
 
@@ -181,10 +183,8 @@ class DesertFoxEngine:
                 "fiqa": fiqa,
             }
 
-        # 5. Extract 512-d Normalized Embedding
         embedding = self.embedder.extract_from_pil(cropped)
 
-        # 6. Check Zero-Knowledge Opt-Out table
         if self.optout_registry.is_excluded(embedding):
             return {
                 "success": False,
@@ -192,9 +192,8 @@ class DesertFoxEngine:
                 "fiqa": fiqa,
             }
 
-        # Searcher-only enrollment gate is intentionally disabled for better crawl scope.
-        # We keep all valid faces in scope and rely on the broader audit/dedupe logic.
         if only_enrolled:
+            # compatibility no-op for broader crawl mode
             pass
 
         if dhash:
@@ -218,10 +217,6 @@ class DesertFoxEngine:
         top_k: int = 10,
         threshold: float = 0.60,
     ) -> Dict[str, Any]:
-        """
-        Audits an identity photo against all indexed public images.
-        Returns FIQA quality telemetry, detected landmarks, and ranked candidate matches.
-        """
         probe_fiqa = FaceQualityAssessment.evaluate_quality(probe_image)
         detected_bbox, probe_vector = self.embed_probe(probe_image)
 
@@ -247,7 +242,6 @@ class DesertFoxEngine:
         }
 
     def embed_probe(self, probe_image: Image.Image) -> Tuple[Tuple[float, float, float, float], np.ndarray]:
-        """Align a probe the same way search does, and return (bbox, embedding)."""
         faces = self.detector.detect_faces(probe_image)
         detected_bbox = faces[0].bbox if faces else (0, 0, probe_image.width, probe_image.height)
         if faces:
@@ -257,7 +251,6 @@ class DesertFoxEngine:
         return detected_bbox, self.embedder.extract_from_pil(aligned_crop)
 
     def _searcher_only_block(self) -> Optional[str]:
-        """Deprecated: searcher-only enrollment gating is disabled for broader crawl scope."""
         return None
 
     @staticmethod
@@ -269,7 +262,6 @@ class DesertFoxEngine:
         return vector
 
     def authorize_probe(self, probe_image: Image.Image, file_sha256: str) -> Dict[str, Any]:
-        """Enroll the first face. Reject a later probe of a different person."""
         _bbox, vector = self.embed_probe(probe_image)
         return self.enrollment.authorize(
             vector,
@@ -285,7 +277,6 @@ class DesertFoxEngine:
         persist: bool = True,
         only_enrolled: bool = False,
     ) -> Dict[str, Any]:
-        """Runs media harvester across one webpage and indexes images."""
         if use_async:
             harvest_result = self.async_harvester.crawl_target(target_url, max_harvest=max_images)
         else:
@@ -334,7 +325,7 @@ class DesertFoxEngine:
         }
 
     def expand_seed_urls_from_query(self, query: str, limit: int = 20) -> List[str]:
-        """Uses a lightweight public search result page to expand an audit beyond a single URL."""
+        """Expand a person/entity query into likely seed URLs across public search results."""
         text = (query or "").strip()
         if not text:
             return []
@@ -363,7 +354,6 @@ class DesertFoxEngine:
         if urls:
             return urls
 
-        # Fallback: extract any http(s) urls from the search page.
         for match in re.findall(r'https?://[^\"\'\s>]+', response.text):
             candidate = normalize_url(match)
             if not candidate or candidate in seen:
@@ -381,7 +371,6 @@ class DesertFoxEngine:
         max_images: int = 10,
         max_sites: int = 10,
     ) -> Dict[str, Any]:
-        """Expand a broader audit across multiple seeds and aggregate all discovered pages."""
         seeds: List[str] = []
         seen_seeds: set[str] = set()
         for candidate in (seed_urls or []):
@@ -455,24 +444,11 @@ class DesertFoxEngine:
             "pages": reports,
         }
 
-    def audit_site(
-        self,
-        seed_url: str,
-        max_pages: Optional[int] = None,
-        max_images: int = 10,
-        max_sites: int = 10,
-    ) -> Dict[str, Any]:
-        """Backward-compatible single-site wrapper for the broader multi-site audit."""
+    def audit_site(self, seed_url: str, max_pages: Optional[int] = None, max_images: int = 10) -> Dict[str, Any]:
         page_cap = max_pages if max_pages is not None else self.config.audit_max_pages
-        return self.audit_sites(
-            [seed_url],
-            max_pages=page_cap,
-            max_images=max_images,
-            max_sites=max_sites,
-        )
+        return self.audit_sites([seed_url], max_pages=page_cap, max_images=max_images, max_sites=self.config.audit_max_sites)
 
     def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:
-        """Finds near-duplicate images indexed in the BK-Tree within Hamming distance."""
         dhash = MultiPerceptualHasher.compute_dhash(image)
         return self.bktree.search(dhash, max_distance=max_distance)
 
@@ -484,7 +460,6 @@ class DesertFoxEngine:
         metadata: Optional[Dict[str, Any]] = None,
         enforce_fiqa: bool = False,
     ) -> Dict[str, Any]:
-        """Indexes an image represented as a numpy array."""
         image = Image.fromarray(image_array.astype(np.uint8))
         return self.process_and_index_image(
             image=image,
@@ -500,14 +475,12 @@ class DesertFoxEngine:
         top_k: int = 10,
         threshold: float = 0.60,
     ) -> List[MatchResult]:
-        """Runs a probe search using a numpy image array, returning MatchResult objects."""
         image = Image.fromarray(probe_array.astype(np.uint8))
         aligned_crop = image.resize((112, 112))
         probe_vector = self.embedder.extract_from_pil(aligned_crop)
         return self._query(probe_vector, top_k=top_k, threshold=threshold)
 
     def _query(self, probe_vector: np.ndarray, top_k: int, threshold: float) -> List[MatchResult]:
-        """FAISS when it mirrors the canonical store. Otherwise an exact matrix scan."""
         faiss_idx = self.faiss_index
         n_records = len(self.vector_store.records)
         if faiss_idx is not None and n_records and not faiss_idx._pending:
@@ -517,7 +490,6 @@ class DesertFoxEngine:
 
     @staticmethod
     def _decorate_matches(matches: List[MatchResult]) -> List[Dict[str, Any]]:
-        """Attach the HUD fields (confidence, L2, angle) without a second pass over the matrix."""
         decorated = []
         for match in matches:
             sim = float(match.similarity)
@@ -540,7 +512,6 @@ class DesertFoxEngine:
         return decorated
 
     def _rehydrate_indexes(self, target_path: str) -> None:
-        """Rebuild BK-tree, partitioned index, and FAISS from the canonical store."""
         self.bktree = BKTree()
         partitioned_path = target_path + ".partitioned"
         if os.path.exists(partitioned_path):
@@ -579,7 +550,6 @@ class DesertFoxEngine:
             self.faiss_index.add_matrix(self.vector_store.vectors, self.vector_store.records)
 
     def load_index(self, path: Optional[str] = None):
-        """Loads vector store and secondary indexes from disk."""
         target_path = path or self.vector_store_path
         self.vector_store_path = target_path
         if os.path.exists(target_path):
@@ -587,7 +557,6 @@ class DesertFoxEngine:
             self._rehydrate_indexes(target_path)
 
     def save_index(self, path: Optional[str] = None):
-        """Persists vector store, partitioned index, and optional FAISS index to disk."""
         target_path = path or self.vector_store_path
         self.vector_store.save(target_path)
         self.partitioned_index.save(target_path + ".partitioned")
@@ -595,5 +564,4 @@ class DesertFoxEngine:
             self.faiss_index.save(target_path + ".faiss")
 
 
-# Backwards-compatibility for older imports
 __all__ = ["DesertFoxEngine"]

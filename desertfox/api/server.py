@@ -7,6 +7,8 @@ import os
 import io
 import base64
 from typing import Dict, Any, List, Optional
+
+from desertfox.privacy.enrollment import sha256_bytes
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -60,10 +62,16 @@ class TakedownRequest(BaseModel):
 
 def decode_base64_image(b64_str: str) -> Image.Image:
     """Helper to decode base64 strings (with or without data URI header) into PIL Image."""
+    image, _digest = decode_base64_payload(b64_str)
+    return image
+
+
+def decode_base64_payload(b64_str: str):
+    """Return the PIL image and the SHA-256 of the uploaded bytes."""
     if "," in b64_str:
         b64_str = b64_str.split(",", 1)[1]
     img_bytes = base64.b64decode(b64_str)
-    return Image.open(io.BytesIO(img_bytes))
+    return Image.open(io.BytesIO(img_bytes)), sha256_bytes(img_bytes)
 
 
 @app.get("/api/stats")
@@ -75,21 +83,38 @@ def get_stats():
         "total_indexed_vectors": len(engine.vector_store.records),
         "embedding_dimensions": engine.embedder.embedding_dim,
         "optout_exclusions_count": len(engine.optout_registry.blacklisted_hashes),
-        "vector_store_path": engine.vector_store_path
+        "vector_store_path": engine.vector_store_path,
+        "face_enrolled": engine.enrollment.enrolled,
+        "enrollment_mode": engine.enrollment.mode,
     }
 
 
 @app.post("/api/search")
 def search_probe(req: SearchRequest):
-    """Audits a probe photo against all indexed faces."""
+    """Audits a probe photo against indexed faces for the one enrolled person."""
     try:
-        image = decode_base64_image(req.image_base64)
+        image, digest = decode_base64_payload(req.image_base64)
+        gate = engine.authorize_probe(image, digest)
+        if not gate["allowed"]:
+            raise HTTPException(status_code=403, detail={
+                "status": "rejected",
+                "message": gate.get("message") or "This photo does not match the enrolled face.",
+                "similarity": gate.get("similarity"),
+                "mode": gate.get("mode"),
+            })
         results = engine.search_probe_image(
             probe_image=image,
             top_k=req.top_k,
             threshold=req.threshold
         )
+        results["enrollment"] = {
+            "created": gate["created"],
+            "similarity": gate["similarity"],
+            "mode": gate["mode"],
+        }
         return results
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
 

@@ -195,6 +195,7 @@
                             <span>🛡️</span><span>PRIVACY DEFENSE PROTOCOL</span>
                         </div>
                         <p>Probe images are processed in-memory and are never permanently stored on external servers or sold to third-party data brokers.</p>
+                        <p>The first photo enrolls the only person this server will search. A different face is rejected. With ArcFace loaded, other photos of that person still match. Without it, only the enrolled file is accepted.</p>
                     </div>
                 </div>
 
@@ -589,6 +590,12 @@
                 });
 
                 const data = await res.json();
+                if (!res.ok) {
+                    const detail = data.detail || {};
+                    const message = typeof detail === "string" ? detail : (detail.message || "Search rejected");
+                    renderResults({ status: "rejected", message: message });
+                    return;
+                }
                 renderResults(data);
             } catch (err) {
                 alert("Search failed: " + err.message);
@@ -602,6 +609,18 @@
             const emptyState = document.getElementById('empty-state');
             const matchesGrid = document.getElementById('matches-grid');
             const counter = document.getElementById('match-counter');
+
+            if (data.status === 'rejected') {
+                emptyState.innerHTML = `
+                    <div class="text-amber-400 text-3xl">🔒</div>
+                    <div class="mono text-sm text-amber-300 font-bold">ONE FACE ONLY</div>
+                    <p class="text-xs text-slate-400">${data.message}</p>
+                `;
+                emptyState.classList.remove('hidden');
+                matchesGrid.classList.add('hidden');
+                counter.innerHTML = `STATUS: <span class="text-amber-400 font-bold">LOCKED</span>`;
+                return;
+            }
 
             if (data.status === 'excluded') {
                 emptyState.innerHTML = `

@@ -41,6 +41,10 @@ def main():
     audit_parser.add_argument("--max-images", type=int, default=10, help="Max images to index per page (1-25)")
     audit_parser.add_argument("--store", type=str, default="./data/desertfox.index", help="Vector store path")
 
+    # Subcommand: enroll-reset
+    reset_parser = subparsers.add_parser("enroll-reset", help="Clear the single enrolled face so a new one can be registered")
+    reset_parser.add_argument("--path", type=str, default="./data/enrolled_face.npy", help="Enrollment file to delete")
+
     # Subcommand: serve
     serve_parser = subparsers.add_parser("serve", help="Launch the DesertFox Cyber-OSINT HUD Web Application")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface to bind to")
@@ -124,6 +128,11 @@ def main():
         print(f"[✓] Indexed {result['newly_indexed_images']} images into {args.store}")
         for page in result["pages"]:
             print(f"    - {page['url']} -> {page['indexed']} indexed")
+
+    elif args.command == "enroll-reset":
+        from desertfox.privacy.enrollment import FaceEnrollment
+        FaceEnrollment(args.path).reset()
+        print(f"[✓] Cleared enrolled face at {args.path}")
 
     elif args.command == "serve":
         import uvicorn

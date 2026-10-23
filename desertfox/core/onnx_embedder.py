@@ -35,6 +35,8 @@ class ArcFaceEmbedder(BaseEmbedder):
     for proper 5-point similarity transform alignment).
     """
 
+    verifies_identity = True
+
     def __init__(
         self,
         model_path: str,

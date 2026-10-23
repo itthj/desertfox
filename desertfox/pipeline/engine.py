@@ -25,6 +25,7 @@ from desertfox.core.bktree import BKTree
 from desertfox.storage.advanced_index import PartitionedVectorIndex
 from desertfox.storage.vector_store import VectorStore, MatchResult
 from desertfox.privacy.optout import ZeroKnowledgeOptOutRegistry
+from desertfox.privacy.enrollment import FaceEnrollment
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
@@ -109,6 +110,10 @@ class DesertFoxEngine:
             self.detector, self.embedder = _auto_detect_backend(self.config)
 
         self.optout_registry = ZeroKnowledgeOptOutRegistry(registry_file=optout_registry_path)
+        self.enrollment = FaceEnrollment(
+            path=self.config.enrollment_path,
+            match_threshold=self.config.enrollment_match_threshold,
+        )
         self.harvester = AdvancedHarvester()
         self.async_harvester = AsyncMediaHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
@@ -224,16 +229,7 @@ class DesertFoxEngine:
         """
         # Run FIQA on input probe
         probe_fiqa = FaceQualityAssessment.evaluate_quality(probe_image)
-
-        faces = self.detector.detect_faces(probe_image)
-        detected_bbox = faces[0].bbox if faces else (0, 0, probe_image.width, probe_image.height)
-        
-        if faces:
-            aligned_crop = self.detector.crop_and_align(probe_image, faces[0])
-        else:
-            aligned_crop = probe_image.resize((112, 112))
-
-        probe_vector = self.embedder.extract_from_pil(aligned_crop)
+        detected_bbox, probe_vector = self.embed_probe(probe_image)
 
         # Check opt-out registry
         if self.optout_registry.is_excluded(probe_vector):
@@ -256,6 +252,25 @@ class DesertFoxEngine:
             "total_matches": len(matches),
             "matches": matches
         }
+
+    def embed_probe(self, probe_image: Image.Image) -> Tuple[Tuple[float, float, float, float], np.ndarray]:
+        """Align a probe the same way search does, and return (bbox, embedding)."""
+        faces = self.detector.detect_faces(probe_image)
+        detected_bbox = faces[0].bbox if faces else (0, 0, probe_image.width, probe_image.height)
+        if faces:
+            aligned_crop = self.detector.crop_and_align(probe_image, faces[0])
+        else:
+            aligned_crop = probe_image.resize((112, 112))
+        return detected_bbox, self.embedder.extract_from_pil(aligned_crop)
+
+    def authorize_probe(self, probe_image: Image.Image, file_sha256: str) -> Dict[str, Any]:
+        """Enroll the first face. Reject a later probe of a different person."""
+        _bbox, vector = self.embed_probe(probe_image)
+        return self.enrollment.authorize(
+            vector,
+            file_sha256=file_sha256,
+            identity_embedder=bool(getattr(self.embedder, "verifies_identity", False)),
+        )
 
     def crawl_and_index_target(self, target_url: str, max_images: int = 15, use_async: bool = True, persist: bool = True) -> Dict[str, Any]:
         """Runs media harvester across one webpage and indexes images."""

@@ -49,6 +49,9 @@ class PerceptualHasher:
 class BaseEmbedder:
     """Interface for Deep Metric Learning embedding backbones (e.g. ArcFace, InsightFace, FaceNet)"""
 
+    # Heuristic embedders do not separate identities. ArcFaceEmbedder sets this True.
+    verifies_identity = False
+
     def __init__(self, embedding_dim: int = 512):
         self.embedding_dim = embedding_dim
 

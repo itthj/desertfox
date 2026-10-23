@@ -471,5 +471,65 @@ class TestDesertFoxV2(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_enrollment_locks_arcface_mode_to_one_identity(self):
+        """A second, dissimilar vector is rejected after the first enrollment."""
+        import tempfile
+        from desertfox.privacy.enrollment import FaceEnrollment
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock = FaceEnrollment(os.path.join(tmpdir, "face.npy"), match_threshold=0.55)
+            person = np.ones(8, dtype=np.float32)
+            other = np.zeros(8, dtype=np.float32)
+            other[0] = 1.0
+            first = lock.authorize(person, file_sha256="aaa", identity_embedder=True)
+            self.assertTrue(first["allowed"])
+            self.assertTrue(first["created"])
+            self.assertEqual(first["mode"], "arcface")
+
+            shifted = person.copy()
+            shifted[0] += 0.05
+            again = lock.authorize(shifted, file_sha256="bbb", identity_embedder=True)
+            self.assertTrue(again["allowed"])
+            self.assertFalse(again["created"])
+
+            rejected = lock.authorize(other, file_sha256="ccc", identity_embedder=True)
+            self.assertFalse(rejected["allowed"])
+
+    def test_api_rejects_a_second_face_file(self):
+        """Without ArcFace, search enrolls the first file and rejects a different upload."""
+        import base64
+        import io
+        import tempfile
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.privacy.enrollment import FaceEnrollment
+
+        def png(color):
+            image = Image.new("RGB", (80, 80), color)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            encoded = base64.b64encode(buffer.getvalue()).decode()
+            return f"data:image/png;base64,{encoded}"
+
+        previous = server.engine.enrollment
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                server.engine.enrollment = FaceEnrollment(os.path.join(tmpdir, "face.npy"), match_threshold=0.55)
+                client = TestClient(server.app)
+                first = client.post("/api/search", json={"image_base64": png((10, 20, 30)), "threshold": 0.5, "top_k": 3})
+                self.assertEqual(first.status_code, 200)
+                self.assertTrue(first.json()["enrollment"]["created"])
+                self.assertEqual(first.json()["enrollment"]["mode"], "exact-file")
+
+                second = client.post("/api/search", json={"image_base64": png((200, 10, 10)), "threshold": 0.5, "top_k": 3})
+                self.assertEqual(second.status_code, 403)
+                self.assertIn("enrolled file", second.json()["detail"]["message"])
+
+                repeat = client.post("/api/search", json={"image_base64": png((10, 20, 30)), "threshold": 0.5, "top_k": 3})
+                self.assertEqual(repeat.status_code, 200)
+                self.assertFalse(repeat.json()["enrollment"]["created"])
+        finally:
+            server.engine.enrollment = previous
+
 if __name__ == "__main__":
     unittest.main()

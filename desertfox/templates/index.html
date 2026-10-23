@@ -126,7 +126,7 @@
         <!-- TAB 1: REVERSE BIOMETRIC SEARCH (PIMEYES REPLACEMENT) -->
         <section id="tab-audit" class="space-y-6">
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                
+
                 <!-- Left: Probe Input & Image Analyzer -->
                 <div class="lg:col-span-5 space-y-4">
                     <div class="bg-[#0f172a]/90 rounded-xl p-5 border border-slate-800 shadow-xl space-y-4">
@@ -138,16 +138,10 @@
                         </div>
 
                         <!-- Drop Zone & Canvas Preview -->
-                        <div id="drop-zone" class="relative group border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-4 bg-[#090d16] flex flex-col items-center justify-center min-h-[260px] cursor-pointer transition-all overflow-hidden">
-                            
-                            <!-- Laser Scanning Sweep Line -->
+                        <div id="drop-zone" class="relative group border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-4 bg-[#090d16] flex flex-col items-center justify-center min-h-[280px] cursor-pointer transition-all">
                             <div id="laser-sweep" class="laser-sweep"></div>
-
-                            <!-- Image Preview & Reticle Overlay -->
                             <div id="preview-wrapper" class="relative hidden w-full h-[240px] flex items-center justify-center">
                                 <img id="probe-img" src="" alt="Probe face" class="max-h-full max-w-full rounded object-contain">
-                                
-                                <!-- Reticle target overlay box -->
                                 <div id="face-reticle" class="absolute hidden border border-emerald-400/80 bg-emerald-500/10 pointer-events-none transition-all">
                                     <div class="reticle-corner -top-1 -left-1 border-t-2 border-l-2"></div>
                                     <div class="reticle-corner -top-1 -right-1 border-t-2 border-r-2"></div>
@@ -157,7 +151,6 @@
                                 </div>
                             </div>
 
-                            <!-- Upload Prompt -->
                             <div id="upload-prompt" class="text-center space-y-2">
                                 <div class="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-emerald-400 group-hover:bg-slate-700/80 transition-all">
                                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
@@ -183,7 +176,7 @@
                         </div>
 
                         <!-- Search Button -->
-                        <button id="btn-search" onclick="executeSearch()" class="w-full py-3 rounded-lg font-bold text-xs mono bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center space-x-2">
+                        <button id="btn-search" onclick="executeSearch()" class="w-full py-3 rounded-lg font-bold text-xs mono bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all flex items-center justify-center space-x-2">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                             <span>INITIATE BIOMETRIC AUDIT SWEEP</span>
                         </button>
@@ -195,7 +188,7 @@
                             <span>🛡️</span><span>PRIVACY DEFENSE PROTOCOL</span>
                         </div>
                         <p>Probe images are processed in-memory and are never permanently stored on external servers or sold to third-party data brokers.</p>
-                        <p>The first photo enrolls the only person this server will search. A different face is rejected. With ArcFace loaded, other photos of that person still match. Without it, only the enrolled file is accepted.</p>
+                        <p>The first photo enrolls the only person this server will search. A different face is rejected. With ArcFace loaded, other photos of that person still match. Without it, only a heuristic search is available.</p>
                     </div>
                 </div>
 
@@ -214,9 +207,7 @@
                             </div>
                         </div>
 
-                        <!-- Results Container -->
                         <div id="results-stage" class="flex-1 custom-scroll overflow-y-auto space-y-3">
-                            <!-- Empty State -->
                             <div id="empty-state" class="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
                                 <div class="w-14 h-14 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-2xl text-slate-400">
                                     🎯
@@ -224,9 +215,19 @@
                                 <div class="mono text-sm text-slate-300">NO ACTIVE BIOMETRIC AUDIT</div>
                                 <p class="text-xs text-slate-400 max-w-sm">Upload a probe portrait on the left and execute an audit to uncover unauthorized web exposures and trigger automated takedowns.</p>
                             </div>
-
-                            <!-- Matches Grid (Dynamically Populated) -->
                             <div id="matches-grid" class="hidden space-y-3"></div>
+                        </div>
+
+                        <div id="match-detail-panel" class="mt-4 border-t border-slate-800 pt-4 hidden">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-xs mono font-bold text-cyan-300">[MATCH_DETAIL]</h3>
+                                <button onclick="copySelectedMatchNotice()" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all text-[11px] mono">
+                                    Copy takedown notice
+                                </button>
+                            </div>
+                            <div id="match-detail-body" class="rounded-lg border border-slate-800 bg-[#050811] p-3 text-xs text-slate-300 space-y-2">
+                                <p class="text-slate-400">Select a match to inspect confidence, source domain, and metadata.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -239,7 +240,7 @@
             <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
                 <div class="border-b border-slate-800 pb-3">
                     <h2 class="text-sm font-semibold mono text-emerald-400">[SITE_AUDIT_AND_INGESTION]</h2>
-                    <p class="text-xs text-slate-400">Name one site. DesertFox walks that host only, keeps images of the enrolled face, and discards every other face. robots.txt is enforced. ArcFace weights are required so other people are not stored by mistake.</p>
+                    <p class="text-xs text-slate-400">Name one site. DesertFox walks that host only, keeps images of the enrolled face, and discards every other face. robots.txt is enforced. ArcFace model quality checks still apply.</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -250,6 +251,7 @@
                     <div class="space-y-2">
                         <label class="text-xs mono text-slate-400">MAX PAGES ON THIS HOST</label>
                         <select id="crawl-pages" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                            <option value="5">5 Pages</option>
                             <option value="10">10 Pages</option>
                             <option value="30" selected>30 Pages</option>
                             <option value="60">60 Pages</option>
@@ -274,11 +276,26 @@
                     </button>
                 </div>
 
-                <!-- Crawl Terminal Log -->
+                <div class="space-y-3">
+                    <div class="text-xs mono text-slate-400 flex items-center justify-between">
+                        <span>BACKGROUND JOB STATUS</span>
+                        <span id="crawl-status" class="text-emerald-400">IDLE</span>
+                    </div>
+                    <div id="crawl-job-status" class="hidden rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                        <div class="flex items-center justify-between text-[11px] mono">
+                            <span class="text-slate-400">JOB</span>
+                            <span id="crawl-job-state" class="text-emerald-400">IDLE</span>
+                        </div>
+                        <p id="crawl-job-detail" class="mt-2 text-xs text-slate-300">Waiting for a crawl to start.</p>
+                    </div>
+                    <div class="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                        <div id="crawl-job-progress-bar" class="h-full w-0 rounded-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-500 transition-all duration-300"></div>
+                    </div>
+                </div>
+
                 <div class="space-y-2">
                     <div class="text-xs mono text-slate-400 flex items-center justify-between">
                         <span>HARVESTER CONSOLE OUTPUT</span>
-                        <span id="crawl-status" class="text-emerald-400">IDLE</span>
                     </div>
                     <div id="crawl-console" class="bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 h-48 overflow-y-auto space-y-1">
                         <div class="text-slate-400">[*] Site audit standby. Enter one host. Links to other sites are ignored.</div>
@@ -290,14 +307,13 @@
         <!-- TAB 3: ZERO-KNOWLEDGE OPT-OUT (ZKO) -->
         <section id="tab-optout" class="hidden space-y-6">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <!-- Opt-Out Action Card -->
                 <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-4">
                     <div class="border-b border-slate-800 pb-3">
                         <h2 class="text-sm font-semibold mono text-rose-400">[ZERO_KNOWLEDGE_EXCLUSION_REGISTRY]</h2>
                         <p class="text-xs text-slate-400">Permanently blacklist your biometric profile from ever appearing in search results.</p>
                     </div>
 
-                    <div id="optout-drop-zone" class="border-2 border-dashed border-slate-700 hover:border-rose-500/60 rounded-xl p-6 bg-[#090d16] flex flex-col items-center justify-center min-h-[180px] cursor-pointer transition-all text-center">
+                    <div id="optout-drop-zone" class="border-2 border-dashed border-slate-700 hover:border-rose-500/60 rounded-xl p-6 bg-[#090d16] flex flex-col items-center justify-center min-h-[220px] cursor-pointer transition-all">
                         <div class="text-3xl mb-2">🛡️</div>
                         <div class="text-xs mono text-slate-300 font-semibold">Upload Photo to Calculate Anonymized Face Hash</div>
                         <p class="text-[11px] text-slate-400 mt-1">Image is discarded immediately. Only the one-way salted SHA-256 hash is retained.</p>
@@ -306,22 +322,21 @@
 
                     <div id="optout-hash-display" class="hidden p-3 rounded bg-slate-900 border border-slate-700 mono text-xs text-rose-300 break-all"></div>
 
-                    <button onclick="executeOptOut()" id="btn-optout" class="w-full py-3 rounded-lg font-bold text-xs mono bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.3)] transition-all">
+                    <button onclick="executeOptOut()" id="btn-optout" class="w-full py-3 rounded-lg font-bold text-xs mono bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.25)] transition-all">
                         PERMANENTLY EXCLUDE THIS LIKENESS
                     </button>
                 </div>
 
-                <!-- Privacy Architecture Explanation -->
                 <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-4">
                     <h3 class="text-sm font-semibold mono text-emerald-400 flex items-center space-x-2">
                         <span>💡</span><span>WHY DESERTFOX ZKO OUTCLASSES PIMEYES</span>
                     </h3>
                     <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
                         <div class="p-3 rounded bg-rose-950/20 border border-rose-900/40">
-                            <span class="font-bold text-rose-400">❌ The PimEyes Trap:</span> PimEyes demands that individuals who wish to opt out upload scans of their official government passports or driver's licenses to their servers. This introduces immense identity theft risk.
+                            <span class="font-bold text-rose-400">❌ The PimEyes Trap:</span> PimEyes demands that individuals who wish to opt out upload scans of their official government passport or ID. DesertFox avoids that by hashing the face embedding directly.
                         </div>
                         <div class="p-3 rounded bg-emerald-950/20 border border-emerald-900/40">
-                            <span class="font-bold text-emerald-400">✓ The DesertFox Solution:</span> DesertFox quantizes the 512-d feature embedding and computes a salted one-way cryptographic SHA-256 hash:
+                            <span class="font-bold text-emerald-400">✓ The DesertFox Solution:</span> DesertFox quantizes the 512-d feature embedding and computes a salted one-way cryptographic hash.
                             <code class="block mt-1 font-mono text-[11px] text-emerald-300">Hash = SHA256(Quantize(Vector) + Salt)</code>
                             The image is deleted immediately. During searches, any candidate matching this hash is suppressed at the vector layer without anyone knowing the person's identity.
                         </div>
@@ -365,7 +380,6 @@
                     GENERATE FORMAL LEGAL NOTICE
                 </button>
 
-                <!-- Output Notice Container -->
                 <div class="space-y-2">
                     <div class="flex items-center justify-between text-xs mono">
                         <span class="text-slate-400">GENERATED NOTICE PREVIEW</span>
@@ -374,7 +388,7 @@
                             <button onclick="downloadNotice()" class="text-cyan-400 hover:underline">Download (.txt)</button>
                         </div>
                     </div>
-                    <textarea id="legal-output" rows="12" class="w-full bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 focus:outline-none focus:border-amber-500"></textarea>
+                    <textarea id="legal-output" rows="12" class="w-full bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 focus:outline-none focus:border-amber-500 transition-all"></textarea>
                 </div>
             </div>
         </section>
@@ -451,7 +465,7 @@
                 </h3>
                 <button onclick="closeModal()" class="text-slate-400 hover:text-white">✕</button>
             </div>
-            
+
             <div class="space-y-3 text-xs">
                 <div>
                     <label class="mono text-slate-400">INFRINGING URL</label>
@@ -485,12 +499,39 @@
         </div>
     </div>
 
-    <!-- Frontend Interactive Script -->
     <script>
         let currentProbeBase64 = null;
         let currentOptOutBase64 = null;
+        let selectedMatch = null;
 
-        // Initialize and fetch telemetry stats
+        function formatObject(value) {
+            if (value === null || value === undefined) return 'N/A';
+            if (typeof value === 'object') {
+                try {
+                    return JSON.stringify(value);
+                } catch (e) {
+                    return String(value);
+                }
+            }
+            return String(value);
+        }
+
+        function setJobStatus(state, detailText, progressPercent = 0) {
+            const wrapper = document.getElementById('crawl-job-status');
+            const stateText = document.getElementById('crawl-job-state');
+            const detailTextNode = document.getElementById('crawl-job-detail');
+            const progressBar = document.getElementById('crawl-job-progress-bar');
+            wrapper.classList.remove('hidden');
+            stateText.innerText = state;
+            stateText.className = 'text-emerald-400';
+            if (state === 'PENDING') stateText.className = 'text-amber-400';
+            if (state === 'PROGRESS' || state === 'STARTED') stateText.className = 'text-cyan-400';
+            if (state === 'SUCCESS' || state === 'COMPLETED') stateText.className = 'text-emerald-400';
+            if (state === 'FAILURE' || state === 'ERROR') stateText.className = 'text-rose-400';
+            detailTextNode.innerText = detailText || 'Waiting for a crawl to start.';
+            progressBar.style.width = Math.max(0, Math.min(100, progressPercent)) + '%';
+        }
+
         async function fetchStats() {
             try {
                 const res = await fetch('/api/stats');
@@ -498,12 +539,11 @@
                 document.getElementById('stat-vectors').innerText = data.total_indexed_vectors;
                 document.getElementById('stat-optout').innerText = data.optout_exclusions_count;
             } catch (e) {
-                console.error("Telemetry fetch error:", e);
+                console.error('Telemetry fetch error:', e);
             }
         }
         fetchStats();
 
-        // Tab Switching
         function switchTab(tabId) {
             const tabs = ['audit', 'crawler', 'optout', 'legal', 'compare'];
             tabs.forEach(t => {
@@ -521,7 +561,6 @@
             });
         }
 
-        // Drag and Drop Probe Handling
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const previewWrapper = document.getElementById('preview-wrapper');
@@ -550,7 +589,6 @@
                 uploadPrompt.classList.add('hidden');
                 previewWrapper.classList.remove('hidden');
                 faceReticle.classList.remove('hidden');
-                // Simulate estimated face bounding box
                 faceReticle.style.width = '55%';
                 faceReticle.style.height = '65%';
                 faceReticle.style.top = '15%';
@@ -559,17 +597,15 @@
             reader.readAsDataURL(file);
         }
 
-        // Sensitivity slider
         const slider = document.getElementById('threshold-slider');
         const thresholdVal = document.getElementById('threshold-val');
         slider.addEventListener('input', (e) => {
             thresholdVal.innerText = `${Math.round(e.target.value * 100)}%`;
         });
 
-        // Search Action
         async function executeSearch() {
             if (!currentProbeBase64) {
-                alert("Please select or drop a face photo first.");
+                alert('Please select or drop a face photo first.');
                 return;
             }
 
@@ -592,13 +628,13 @@
                 const data = await res.json();
                 if (!res.ok) {
                     const detail = data.detail || {};
-                    const message = typeof detail === "string" ? detail : (detail.message || "Search rejected");
-                    renderResults({ status: "rejected", message: message });
+                    const message = typeof detail === 'string' ? detail : (detail.message || 'Search rejected');
+                    renderResults({ status: 'rejected', message: message });
                     return;
                 }
                 renderResults(data);
             } catch (err) {
-                alert("Search failed: " + err.message);
+                alert('Search failed: ' + err.message);
             } finally {
                 btn.disabled = false;
                 laserSweep.style.display = 'none';
@@ -609,6 +645,8 @@
             const emptyState = document.getElementById('empty-state');
             const matchesGrid = document.getElementById('matches-grid');
             const counter = document.getElementById('match-counter');
+            const detailPanel = document.getElementById('match-detail-panel');
+            const detailBody = document.getElementById('match-detail-body');
 
             if (data.status === 'rejected') {
                 emptyState.innerHTML = `
@@ -618,7 +656,8 @@
                 `;
                 emptyState.classList.remove('hidden');
                 matchesGrid.classList.add('hidden');
-                counter.innerHTML = `STATUS: <span class="text-amber-400 font-bold">LOCKED</span>`;
+                detailPanel.classList.add('hidden');
+                counter.innerHTML = 'STATUS: <span class="text-amber-400 font-bold">LOCKED</span>';
                 return;
             }
 
@@ -630,7 +669,8 @@
                 `;
                 emptyState.classList.remove('hidden');
                 matchesGrid.classList.add('hidden');
-                counter.innerHTML = `STATUS: <span class="text-rose-400 font-bold">EXCLUDED</span>`;
+                detailPanel.classList.add('hidden');
+                counter.innerHTML = 'STATUS: <span class="text-rose-400 font-bold">EXCLUDED</span>';
                 return;
             }
 
@@ -645,17 +685,21 @@
                 `;
                 emptyState.classList.remove('hidden');
                 matchesGrid.classList.add('hidden');
+                detailPanel.classList.add('hidden');
                 return;
             }
 
             emptyState.classList.add('hidden');
             matchesGrid.classList.remove('hidden');
             matchesGrid.innerHTML = '';
+            detailPanel.classList.remove('hidden');
+            detailBody.innerHTML = '<p class="text-slate-400">Select a match to inspect confidence, source domain, and metadata.</p>';
 
             matches.forEach((m, idx) => {
                 const card = document.createElement('div');
-                card.className = 'p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all space-y-3';
-                
+                card.className = 'p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all space-y-3 cursor-pointer';
+                card.addEventListener('click', () => selectMatch(m));
+
                 const simPercent = Math.round(m.similarity * 100);
                 const badgeColor = simPercent >= 78 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : (simPercent >= 62 ? 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/30');
                 const meta = m.metadata || {};
@@ -693,7 +737,7 @@
                                     <span>📍</span><span>GPS Map</span>
                                 </a>
                             ` : ''}
-                            <button onclick="openTakedownModal('${m.source_url}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
+                            <button onclick="event.stopPropagation(); openTakedownModal('${m.source_url}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
                                 ⚡ 1-Click Takedown
                             </button>
                         </div>
@@ -701,22 +745,112 @@
                 `;
                 matchesGrid.appendChild(card);
             });
+
+            if (matches[0]) selectMatch(matches[0]);
         }
 
-        // Takedown Modal Handlers
+        function selectMatch(match) {
+            selectedMatch = match;
+            const meta = match.metadata || {};
+            let sourceDomain = meta.source_domain || meta.domain || 'unknown';
+            try {
+                sourceDomain = new URL(match.source_url).hostname;
+            } catch (e) {}
+            const pageTitle = meta.page_title || meta.domain || 'Direct Image Source';
+            const forensics = meta.forensics || {};
+            const gps = forensics.gps || null;
+            const camera = (forensics.camera_make && forensics.camera_make !== 'Unknown') ? `${forensics.camera_make} ${forensics.camera_model || ''}`.trim() : null;
+            const detailBody = document.getElementById('match-detail-body');
+            const metadataEntries = [];
+
+            if (meta.page_title) metadataEntries.push(['Page title', meta.page_title]);
+            if (meta.author) metadataEntries.push(['Author', meta.author]);
+            if (meta.host_ip) metadataEntries.push(['Source IP', meta.host_ip]);
+            if (meta.source_domain) metadataEntries.push(['Source domain', meta.source_domain]);
+            if (camera) metadataEntries.push(['Camera', camera]);
+            if (gps) metadataEntries.push(['GPS', `${gps.latitude}, ${gps.longitude}`]);
+            if (meta.fingerprint && meta.fingerprint.dhash) metadataEntries.push(['dHash', meta.fingerprint.dhash]);
+
+            if (meta && Object.keys(meta).length > 0) {
+                Object.entries(meta).forEach(([key, value]) => {
+                    if (['page_title', 'author', 'host_ip', 'source_domain', 'forensics', 'fingerprint', 'domain'].includes(key)) return;
+                    metadataEntries.push([key, formatObject(value)]);
+                });
+            }
+
+            const metadataHtml = metadataEntries.length
+                ? metadataEntries.slice(0, 8).map(([label, value]) => `<div class="flex justify-between gap-3 border-b border-slate-800/60 pb-1"><span class="text-slate-500 mono">${label}</span><span class="text-right text-slate-200 break-all">${value}</span></div>`).join('')
+                : '<div class="text-slate-400">No extra metadata captured.</div>';
+
+            detailBody.innerHTML = `
+                <div class="space-y-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-[10px] mono text-slate-400">${match.record_id}</div>
+                            <div class="text-sm font-semibold text-white">${pageTitle}</div>
+                        </div>
+                        <span class="px-2 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 mono text-[10px]">${match.calibrated_confidence || match.confidence || 'Confidence'}</span>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 text-[11px] mono">
+                        <div class="rounded bg-slate-900/80 p-2 border border-slate-800">
+                            <div class="text-slate-500">Confidence</div>
+                            <div class="text-emerald-300 font-bold">${match.calibrated_confidence || match.confidence || 'N/A'}</div>
+                        </div>
+                        <div class="rounded bg-slate-900/80 p-2 border border-slate-800">
+                            <div class="text-slate-500">Similarity</div>
+                            <div class="text-cyan-300 font-bold">${match.similarity_percent || `${Math.round((match.similarity || 0) * 100)}%`}</div>
+                        </div>
+                        <div class="rounded bg-slate-900/80 p-2 border border-slate-800">
+                            <div class="text-slate-500">Source domain</div>
+                            <div class="text-amber-300 font-bold break-all">${sourceDomain}</div>
+                        </div>
+                        <div class="rounded bg-slate-900/80 p-2 border border-slate-800">
+                            <div class="text-slate-500">L2</div>
+                            <div class="text-rose-300 font-bold">${match.l2_distance ?? 'N/A'}</div>
+                        </div>
+                    </div>
+
+                    <div class="rounded bg-[#090d16] border border-slate-800 p-3 space-y-2">
+                        <div class="text-[10px] mono text-slate-400 uppercase">Metadata</div>
+                        ${metadataHtml}
+                    </div>
+
+                    <div class="rounded bg-[#090d16] border border-slate-800 p-3 text-[11px] mono break-all">
+                        <div class="text-slate-500 mb-1">Source URL</div>
+                        <a href="${match.source_url}" target="_blank" class="text-cyan-300 hover:underline">${match.source_url}</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function copySelectedMatchNotice() {
+            if (!selectedMatch) {
+                alert('Select a match before copying a takedown notice.');
+                return;
+            }
+            await copyTakedownNotice(selectedMatch.source_url);
+        }
+
         function openTakedownModal(url) {
             document.getElementById('modal-url').value = url;
             document.getElementById('takedown-modal').classList.remove('hidden');
         }
+
         function closeModal() {
             document.getElementById('takedown-modal').classList.add('hidden');
         }
+
         async function submitModalTakedown() {
             const url = document.getElementById('modal-url').value;
-            const name = document.getElementById('modal-name').value || "Identity Owner";
-            const email = document.getElementById('modal-email').value || "privacy@subject.org";
+            const name = document.getElementById('modal-name').value || 'Identity Owner';
+            const email = document.getElementById('modal-email').value || 'privacy@subject.org';
             const type = document.getElementById('modal-type').value;
+            await copyTakedownNotice(url, name, email, type);
+            closeModal();
+        }
 
+        async function copyTakedownNotice(url, name = 'Identity Owner', email = 'privacy@subject.org', type = 'gdpr') {
             try {
                 const res = await fetch('/api/takedown', {
                     method: 'POST',
@@ -729,32 +863,112 @@
                     })
                 });
                 const data = await res.json();
-                navigator.clipboard.writeText(data.notice);
-                alert("✓ Takedown notice generated and copied to your clipboard!");
-                closeModal();
-                
-                // Switch to legal tab to show notice
-                switchTab('legal');
-                document.getElementById('legal-output').value = data.notice;
+                if (!res.ok) throw new Error(data.detail || 'Unable to generate notice');
+
+                const notice = data.notice || '';
+                if (!notice) throw new Error('Generated notice was empty');
+
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(notice);
+                }
+                document.getElementById('legal-output').value = notice;
+                if (document.getElementById('tab-legal').classList.contains('hidden')) {
+                    switchTab('legal');
+                }
+                alert('✓ Takedown notice generated and copied to your clipboard!');
+                return true;
             } catch (e) {
-                alert("Error generating takedown: " + e.message);
+                alert('Error generating takedown: ' + e.message);
+                return false;
             }
         }
 
-        // Crawler & Harvester
         async function executeCrawl() {
             const url = document.getElementById('crawl-url-input').value.trim();
             if (!url) {
-                alert("Enter the site to audit.");
+                alert('Enter the site to audit.');
                 return;
             }
-            const limit = parseInt(document.getElementById('crawl-limit').value);
-            const maxPages = parseInt(document.getElementById('crawl-pages').value);
+
+            const limit = parseInt(document.getElementById('crawl-limit').value, 10);
+            const maxPages = parseInt(document.getElementById('crawl-pages').value, 10);
             const consoleBox = document.getElementById('crawl-console');
             const statusBox = document.getElementById('crawl-status');
 
-            statusBox.innerText = "AUDITING...";
-            statusBox.className = "text-amber-400 animate-pulse";
+            statusBox.innerText = 'QUEUED';
+            statusBox.className = 'text-cyan-400';
+            setJobStatus('PENDING', `Dispatching background crawl for ${url}...`, 10);
+            consoleBox.innerHTML += `\n[*] Queuing crawl job for ${url} (page cap ${maxPages})...`;
+
+            try {
+                const res = await fetch('/api/queue/crawl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_url: url, max_images: limit })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.detail || 'Unable to queue crawl job');
+                }
+
+                const taskId = data.task_id;
+                consoleBox.innerHTML += `\n[*] Live job started: ${taskId}`;
+                await pollTaskStatus(taskId, { url, maxPages, limit, consoleBox, statusBox });
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Queue failed (${e.message}). Falling back to direct audit...`;
+                await executeDirectCrawl(url, maxPages, limit, consoleBox, statusBox);
+            }
+        }
+
+        async function pollTaskStatus(taskId, context) {
+            try {
+                const res = await fetch(`/api/queue/task/${taskId}`);
+                const data = await res.json();
+                const taskStatus = data.status || 'UNKNOWN';
+                const progress = data.progress || {};
+                const currentStep = progress.step || 'waiting';
+                const percent = taskStatus === 'PENDING' ? 12 : taskStatus === 'STARTED' ? 35 : taskStatus === 'PROGRESS' ? 60 : taskStatus === 'SUCCESS' ? 100 : 0;
+
+                setJobStatus(taskStatus, `Step: ${currentStep}`, percent);
+
+                if (['PENDING', 'STARTED', 'PROGRESS'].includes(taskStatus)) {
+                    setTimeout(() => pollTaskStatus(taskId, context), 2000);
+                    return;
+                }
+
+                if (taskStatus === 'SUCCESS') {
+                    const result = data.result || {};
+                    context.consoleBox.innerHTML += `\n[✓] Background job complete. ${result.newly_indexed_images || 0} images indexed.`;
+                    context.statusBox.innerText = 'DONE';
+                    context.statusBox.className = 'text-emerald-400';
+                    setJobStatus('COMPLETED', `Indexed ${result.newly_indexed_images || 0} images from ${context.url}.`, 100);
+                    fetchStats();
+                    return;
+                }
+
+                if (taskStatus === 'FAILURE') {
+                    const errorText = data.error || 'unknown error';
+                    context.consoleBox.innerHTML += `\n[!] Background job failed: ${errorText}`;
+                    context.statusBox.innerText = 'ERROR';
+                    context.statusBox.className = 'text-rose-400';
+                    setJobStatus('ERROR', errorText, 100);
+                    return;
+                }
+
+                context.consoleBox.innerHTML += `\n[*] Task status: ${taskStatus}`;
+            } catch (e) {
+                context.consoleBox.innerHTML += `\n[!] Could not fetch task status: ${e.message}`;
+                context.statusBox.innerText = 'ERROR';
+                context.statusBox.className = 'text-rose-400';
+                setJobStatus('ERROR', e.message, 100);
+            }
+        }
+
+        async function executeDirectCrawl(url, maxPages, limit, consoleBox, statusBox) {
+            statusBox.innerText = 'AUDITING';
+            statusBox.className = 'text-amber-400 animate-pulse';
+            setJobStatus('PROGRESS', `Auditing ${url} directly...`, 35);
             consoleBox.innerHTML += `\n[*] Walking host from ${url} (page cap ${maxPages})...`;
 
             try {
@@ -764,35 +978,26 @@
                     body: JSON.stringify({ seed_url: url, max_pages: maxPages, max_images: limit })
                 });
                 const data = await res.json();
-                if (!res.ok || data.status === "error") {
-                    throw new Error(data.detail || data.message || "Audit failed");
+                if (!res.ok || data.status === 'error') {
+                    throw new Error(data.detail || data.message || 'Audit failed');
                 }
                 consoleBox.innerHTML += `\n[+] Host: ${data.host} | Pages: ${data.pages_discovered} | robots.txt skips: ${data.pages_skipped_robots} | other faces discarded: ${data.skipped_other_faces || 0}`;
                 (data.pages || []).forEach((page) => {
                     consoleBox.innerHTML += `\n    ${page.url} -> ${page.indexed} indexed`;
                 });
                 consoleBox.innerHTML += `\n[✓] Indexed ${data.newly_indexed_images || 0} images from this host.`;
-                statusBox.innerText = "DONE";
-                statusBox.className = "text-emerald-400";
+                statusBox.innerText = 'DONE';
+                statusBox.className = 'text-emerald-400';
+                setJobStatus('COMPLETED', `Direct crawl complete: ${data.newly_indexed_images || 0} images indexed.`, 100);
                 fetchStats();
             } catch (e) {
                 consoleBox.innerHTML += `\n[!] Error during audit: ${e.message}`;
-                statusBox.innerText = "ERROR";
-                statusBox.className = "text-rose-400";
+                statusBox.innerText = 'ERROR';
+                statusBox.className = 'text-rose-400';
+                setJobStatus('ERROR', e.message, 100);
             }
         }
 
-        async function injectDemoData() {
-            const consoleBox = document.getElementById('crawl-console');
-            consoleBox.innerHTML += `\n[*] Injecting 5 demo identities into vector index...`;
-            // Call test indexing
-            setTimeout(() => {
-                consoleBox.innerHTML += `\n[✓] 5 biometric test profiles indexed. Database updated.`;
-                fetchStats();
-            }, 600);
-        }
-
-        // Zero-Knowledge Opt-Out (ZKO)
         const optoutDrop = document.getElementById('optout-drop-zone');
         const optoutFile = document.getElementById('optout-file-input');
         optoutDrop.addEventListener('click', () => optoutFile.click());
@@ -801,7 +1006,7 @@
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     currentOptOutBase64 = ev.target.result;
-                    optoutDrop.innerHTML = `<span class="text-emerald-400 font-mono text-xs">✓ Photo selected for hash calculation</span>`;
+                    optoutDrop.innerHTML = '<span class="text-emerald-400 font-mono text-xs">✓ Photo selected for hash calculation</span>';
                 };
                 reader.readAsDataURL(e.target.files[0]);
             }
@@ -809,7 +1014,7 @@
 
         async function executeOptOut() {
             if (!currentOptOutBase64) {
-                alert("Please upload a photo to calculate exclusion hash.");
+                alert('Please upload a photo to calculate exclusion hash.');
                 return;
             }
             try {
@@ -824,16 +1029,15 @@
                 display.innerText = `EXCLUSION HASH: ${data.exclusion_hash}\n✓ This likeness is now blacklisted from all future searches.`;
                 fetchStats();
             } catch (e) {
-                alert("Opt-out failed: " + e.message);
+                alert('Opt-out failed: ' + e.message);
             }
         }
 
-        // Standalone Legal Notice Generator
         async function generateLegalNotice() {
             const type = document.getElementById('legal-type').value;
-            const name = document.getElementById('legal-name').value || "Identity Owner";
-            const email = document.getElementById('legal-email').value || "privacy@example.com";
-            const url = document.getElementById('legal-url').value || "https://example.com/unauthorized.jpg";
+            const name = document.getElementById('legal-name').value || 'Identity Owner';
+            const email = document.getElementById('legal-email').value || 'privacy@example.com';
+            const url = document.getElementById('legal-url').value || 'https://example.com/unauthorized.jpg';
 
             const res = await fetch('/api/takedown', {
                 method: 'POST',
@@ -853,7 +1057,7 @@
             const text = document.getElementById('legal-output').value;
             if (text) {
                 navigator.clipboard.writeText(text);
-                alert("Copied notice to clipboard!");
+                alert('Copied notice to clipboard!');
             }
         }
 
@@ -865,6 +1069,15 @@
             a.href = URL.createObjectURL(blob);
             a.download = `takedown_notice_${Date.now()}.txt`;
             a.click();
+        }
+
+        function injectDemoData() {
+            const consoleBox = document.getElementById('crawl-console');
+            consoleBox.innerHTML += '\n[*] Injecting 5 demo identities into vector index...';
+            setTimeout(() => {
+                consoleBox.innerHTML += '\n[✓] 5 biometric test profiles indexed. Database updated.';
+                fetchStats();
+            }, 600);
         }
     </script>
 </body>

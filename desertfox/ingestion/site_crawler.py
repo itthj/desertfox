@@ -3,18 +3,21 @@ Same-host site walker for DesertFox.
 
 Given one seed URL, discovers pages on that host from its sitemap and from
 links on the pages themselves. It does not query a search engine and it does
-not follow links to other hosts. robots.txt is respected.
+not follow links to other hosts. robots.txt is respected by default, but can
+be explicitly disabled for a broad audit.
 """
 
-import time
 import logging
+import time
+import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, urlunparse
-import xml.etree.ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
+
+from desertfox.security import UnsafeURLError, safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +125,12 @@ class SiteCrawler:
         max_pages: int = 30,
         max_depth: int = 2,
         fetcher: Optional[Fetcher] = None,
+        enforce_robots: bool = True,
     ) -> Dict[str, object]:
         """
         Walk one host. max_pages and max_depth are hard bounds.
         fetcher is a test hook: (url) -> (status, content_type, text, final_url) or None.
+        When enforce_robots is False, the crawl ignores robots.txt restrictions intentionally.
         """
         fetch = fetcher or self._http_fetch
         seed = normalize_url(seed_url)
@@ -137,16 +142,19 @@ class SiteCrawler:
         max_depth = max(0, min(int(max_depth), 4))
         origin = f"{urlparse(seed).scheme}://{urlparse(seed).netloc}"
 
-        parser, sitemap_urls = self._load_robots(origin, fetch)
-        if parser is not None:
-            crawl_delay = None
-            if hasattr(parser, "crawl_delay"):
-                crawl_delay = parser.crawl_delay(self.user_agent)
-            if crawl_delay:
-                self.delay_s = max(self.delay_s, float(crawl_delay))
+        parser = None
+        sitemap_urls = []
+        if enforce_robots:
+            parser, sitemap_urls = self._load_robots(origin, fetch)
+            if parser is not None:
+                crawl_delay = None
+                if hasattr(parser, "crawl_delay"):
+                    crawl_delay = parser.crawl_delay(self.user_agent)
+                if crawl_delay:
+                    self.delay_s = max(self.delay_s, float(crawl_delay))
 
         def allowed(url: str) -> bool:
-            if parser is None:
+            if not enforce_robots or parser is None:
                 return True
             return parser.can_fetch(self.user_agent, url)
 
@@ -165,7 +173,7 @@ class SiteCrawler:
             if normalized in seen:
                 return
             seen.add(normalized)
-            if not allowed(normalized):
+            if enforce_robots and not allowed(normalized):
                 skipped += 1
                 return
             queue.append((normalized, depth))
@@ -242,26 +250,15 @@ class SiteCrawler:
     def _http_fetch(self, url: str) -> Optional[FetchResult]:
         self._polite_wait()
         try:
-            response = requests.get(
+            response = safe_get(
                 url,
                 headers=self.headers,
                 timeout=self.timeout,
-                allow_redirects=True,
-                stream=True,
+                max_bytes=self.max_body_bytes,
+                truncate=True,
             )
-            chunks = []
-            size = 0
-            for chunk in response.iter_content(65536):
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                size += len(chunk)
-                if size >= self.max_body_bytes:
-                    break
-            text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
-            content_type = response.headers.get("Content-Type", "")
-            return response.status_code, content_type, text, response.url
-        except requests.RequestException as exc:
+            return response.status_code, response.content_type, response.text, response.url
+        except (requests.RequestException, UnsafeURLError) as exc:
             logger.debug("Fetch failed for %s: %s", url, exc)
             return None
 

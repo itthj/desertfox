@@ -3,37 +3,45 @@ FastAPI application for DesertFox Facial OSINT & Privacy Defense Suite.
 Serves REST API and responsive Cyber-OSINT HUD Web Interface.
 """
 
-import os
-import io
 import base64
-from typing import Dict, Any, List, Optional
+import io
+import os
+from typing import Any, Dict, List, Optional
 
-from desertfox.privacy.enrollment import sha256_bytes
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
 from desertfox.pipeline.engine import DesertFoxEngine
+from desertfox.privacy.enrollment import sha256_bytes
 from desertfox.privacy.takedown import TakedownNoticeGenerator
+from desertfox.security import (
+    PayloadTooLargeError,
+    UnsafeURLError,
+    decode_base64_image,
+    decode_base64_payload as _decode_bounded,
+    validate_public_url,
+)
 
 app = FastAPI(
     title="DesertFox OSINT & Exposure Engine",
     description="Ethical facial recognition search engine and automated privacy remediation framework.",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Initialize Engine singleton
 engine = DesertFoxEngine(
     vector_store_path="./data/desertfox.index",
-    optout_registry_path="./data/optout_registry.json"
+    optout_registry_path="./data/optout_registry.json",
 )
 
-# Pydantic Request Models
+
 class SearchRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded probe face image")
     threshold: float = Field(0.60, ge=0.1, le=1.0)
     top_k: int = Field(10, ge=1, le=50)
+
 
 class SearchReverseRequest(BaseModel):
     image_base64: str = Field(..., description="Probe image to reverse-search against discovered public web faces.")
@@ -46,15 +54,18 @@ class SearchReverseRequest(BaseModel):
     max_images: int = Field(10, ge=1, le=50)
     max_sites: int = Field(10, ge=1, le=50)
 
+
 class IndexImageRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to index")
     record_id: str
     source_url: str
     metadata: Optional[Dict[str, Any]] = None
 
+
 class CrawlRequest(BaseModel):
     target_url: str = Field(..., description="URL to scrape and ingest")
     max_images: int = Field(10, ge=1, le=50)
+
 
 class AuditRequest(BaseModel):
     seed_url: Optional[str] = Field(None, min_length=3, max_length=500, description="One site to walk. Other hosts are not followed.")
@@ -64,8 +75,10 @@ class AuditRequest(BaseModel):
     max_images: int = Field(10, ge=1, le=50)
     max_sites: int = Field(10, ge=1, le=50)
 
+
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
+
 
 class TakedownRequest(BaseModel):
     notice_type: str = Field("gdpr", description="'gdpr' or 'dmca'")
@@ -74,18 +87,21 @@ class TakedownRequest(BaseModel):
     subject_email: str
     notes: Optional[str] = ""
 
-def decode_base64_image(b64_str: str) -> Image.Image:
-    """Helper to decode base64 strings (with or without data URI header) into PIL Image."""
-    image, _digest = decode_base64_payload(b64_str)
-    return image
-
 
 def decode_base64_payload(b64_str: str):
     """Return the PIL image and the SHA-256 of the uploaded bytes."""
     if "," in b64_str:
         b64_str = b64_str.split(",", 1)[1]
     img_bytes = base64.b64decode(b64_str)
-    return Image.open(io.BytesIO(img_bytes)), sha256_bytes(img_bytes)
+    image = Image.open(io.BytesIO(img_bytes))
+    return image, sha256_bytes(img_bytes)
+
+
+def _reject_unsafe(exc: Exception) -> HTTPException:
+    """Maps hardening errors to precise HTTP statuses."""
+    if isinstance(exc, PayloadTooLargeError):
+        return HTTPException(status_code=413, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/stats")
@@ -110,16 +126,19 @@ def search_probe(req: SearchRequest):
         image, digest = decode_base64_payload(req.image_base64)
         gate = engine.authorize_probe(image, digest)
         if not gate["allowed"]:
-            raise HTTPException(status_code=403, detail={
-                "status": "rejected",
-                "message": gate.get("message") or "This photo does not match the enrolled face.",
-                "similarity": gate.get("similarity"),
-                "mode": gate.get("mode"),
-            })
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "status": "rejected",
+                    "message": gate.get("message") or "This photo does not match the enrolled face.",
+                    "similarity": gate.get("similarity"),
+                    "mode": gate.get("mode"),
+                },
+            )
         results = engine.search_probe_image(
             probe_image=image,
             top_k=req.top_k,
-            threshold=req.threshold
+            threshold=req.threshold,
         )
         results["enrollment"] = {
             "created": gate["created"],
@@ -129,8 +148,10 @@ def search_probe(req: SearchRequest):
         return results
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
+    except (PayloadTooLargeError, UnsafeURLError) as exc:
+        raise _reject_unsafe(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Search failed: {str(exc)}")
 
 
 @app.post("/api/search/reverse")
@@ -165,8 +186,10 @@ def search_reverse_probe(req: SearchReverseRequest):
         return result
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Reverse search failed: {str(e)}")
+    except (PayloadTooLargeError, UnsafeURLError) as exc:
+        raise _reject_unsafe(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Reverse search failed: {str(exc)}")
 
 
 @app.post("/api/index/image")
@@ -178,15 +201,16 @@ def index_single_image(req: IndexImageRequest):
             image=image,
             record_id=req.record_id,
             source_url=req.source_url,
-            metadata=req.metadata
+            metadata=req.metadata,
         )
         if res.get("success"):
             engine.save_index()
             return {"status": "indexed", "record_id": req.record_id, "fiqa_score": res.get("fiqa_score")}
-        else:
-            return {"status": "skipped", "reason": res.get("reason", "Excluded or low quality")}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Indexing failed: {str(e)}")
+        return {"status": "skipped", "reason": res.get("reason", "Excluded or low quality")}
+    except (PayloadTooLargeError, UnsafeURLError) as exc:
+        raise _reject_unsafe(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Indexing failed: {str(exc)}")
 
 
 @app.post("/api/index/audit")
@@ -214,34 +238,45 @@ def audit_site(req: AuditRequest):
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Site audit failed: {str(e)}")
+    except (PayloadTooLargeError, UnsafeURLError) as exc:
+        raise _reject_unsafe(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Site audit failed: {str(exc)}")
 
 
 @app.post("/api/index/crawl")
 def crawl_website(req: CrawlRequest):
     """Crawls a website with advanced harvester, extracting OSINT metadata and public images."""
     try:
+        validate_public_url(req.target_url)
+    except UnsafeURLError as exc:
+        raise _reject_unsafe(exc)
+    try:
         crawl_res = engine.crawl_and_index_target(req.target_url, max_images=req.max_images)
         return crawl_res
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Crawl failed: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Crawl failed: {str(exc)}")
 
 
 @app.post("/api/queue/crawl")
 def enqueue_crawl_job(req: CrawlRequest):
     """Dispatches a background web crawl job to the distributed Celery/Redis task queue."""
     try:
+        validate_public_url(req.target_url)
+    except UnsafeURLError as exc:
+        raise _reject_unsafe(exc)
+    try:
         from desertfox.queue.tasks import crawl_and_index_task
+
         task = crawl_and_index_task.delay(target_url=req.target_url, max_images=req.max_images)
         return {
             "status": "queued",
             "task_id": task.id,
             "target_url": req.target_url,
-            "message": "Harvesting job successfully dispatched to Celery worker queue"
+            "message": "Harvesting job successfully dispatched to Celery worker queue",
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to queue task: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to queue task: {str(exc)}")
 
 
 @app.get("/api/queue/task/{task_id}")
@@ -249,11 +284,12 @@ def get_task_status(task_id: str):
     """Queries status and telemetry for a distributed background harvesting task."""
     try:
         from desertfox.queue.celery_app import celery_app
+
         task = celery_app.AsyncResult(task_id)
         response = {
             "task_id": task_id,
             "status": task.status,
-            "ready": task.ready()
+            "ready": task.ready(),
         }
         if task.successful():
             response["result"] = task.result
@@ -262,8 +298,8 @@ def get_task_status(task_id: str):
         elif task.status == "PROGRESS":
             response["progress"] = task.info
         return response
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to inspect task: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to inspect task: {str(exc)}")
 
 
 @app.post("/api/opt-out")
@@ -276,10 +312,12 @@ def register_optout(req: OptOutRequest):
         return {
             "status": "excluded",
             "message": "Identity registered in Zero-Knowledge Opt-Out Registry. Future searches will suppress this likeness.",
-            "exclusion_hash": exclusion_hash
+            "exclusion_hash": exclusion_hash,
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Opt-out registration failed: {str(e)}")
+    except (PayloadTooLargeError, UnsafeURLError) as exc:
+        raise _reject_unsafe(exc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Opt-out registration failed: {str(exc)}")
 
 
 @app.post("/api/takedown")
@@ -290,21 +328,21 @@ def generate_takedown(req: TakedownRequest):
             subject_name=req.subject_name,
             subject_email=req.subject_email,
             infringing_url=req.infringing_url,
-            additional_notes=req.notes or ""
+            additional_notes=req.notes or "",
         )
     elif req.notice_type.lower() == "ccpa":
         notice = TakedownNoticeGenerator.generate_ccpa_deletion_request(
             consumer_name=req.subject_name,
             consumer_email=req.subject_email,
             infringing_url=req.infringing_url,
-            additional_notes=req.notes or ""
+            additional_notes=req.notes or "",
         )
     else:
         notice = TakedownNoticeGenerator.generate_dmca_notice(
             copyright_owner=req.subject_name,
             contact_email=req.subject_email,
             infringing_url=req.infringing_url,
-            original_work_description=req.notes or "Original photographic portrait owned by claimant"
+            original_work_description=req.notes or "Original photographic portrait owned by claimant",
         )
     return {"notice": notice, "type": req.notice_type.upper()}
 
@@ -314,6 +352,6 @@ def index_dashboard():
     """Serves the Cyber-OSINT HUD dashboard."""
     html_file = os.path.join(os.path.dirname(__file__), "../templates/index.html")
     if os.path.exists(html_file):
-        with open(html_file, "r", encoding="utf-8") as f:
-            return f.read()
+        with open(html_file, "r", encoding="utf-8") as handle:
+            return handle.read()
     return "<h1>DesertFox Engine Active. (Template loading...)</h1>"

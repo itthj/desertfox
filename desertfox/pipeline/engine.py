@@ -1,16 +1,18 @@
 """
-High-level DesertFox OSINT & Exposure Engine (v2.0 Architecture).
+High-level DesertFox OSINT & Exposure Engine (v3.0 Architecture).
 Coordinates:
 1. FIQA (Face Image Quality Assessment & Blur Rejection)
-2. ArcFace-style 512-d unit-hypersphere embedding extraction
-3. Multi-Hash perceptual fingerprint cascade (pHash + dHash + aHash)
-4. Advanced Voronoi space-partitioned vector indexing
-5. Forensic OSINT & EXIF metadata extraction
-6. Zero-Knowledge Opt-Out (ZKO) cryptographic filtering
-7. BK-Tree perceptual near-duplicate filtering
+2. ArcFace 512-d unit-hypersphere embedding extraction (ONNX or fallback)
+3. SCRFD multi-face detection with 5-point landmark alignment (ONNX or fallback)
+4. Multi-Hash perceptual fingerprint cascade (pHash + dHash + aHash)
+5. Advanced Voronoi space-partitioned vector indexing
+6. Forensic OSINT & EXIF metadata extraction
+7. Zero-Knowledge Opt-Out (ZKO) cryptographic filtering
+8. BK-Tree perceptual near-duplicate filtering
 """
 
 import os
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from PIL import Image
@@ -27,6 +29,52 @@ from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
 from desertfox.config import EngineConfig
 
+logger = logging.getLogger(__name__)
+
+
+def _auto_detect_backend(config: EngineConfig) -> Tuple[BaseDetector, BaseEmbedder]:
+    """
+    Auto-detects and loads ONNX models if available, otherwise falls back
+    to heuristic detector and hand-crafted feature embedder.
+    """
+    detector = None
+    embedder = None
+
+    try:
+        from desertfox.models.download import get_default_detector_path, get_default_embedder_path
+
+        detector_path = config.detector_model_path or get_default_detector_path()
+        embedder_path = config.embedder_model_path or get_default_embedder_path()
+
+        if detector_path and os.path.exists(detector_path):
+            from desertfox.core.onnx_detector import SCRFDDetector
+            detector = SCRFDDetector(
+                model_path=detector_path,
+                confidence_threshold=config.detection_confidence
+            )
+            logger.info("ONNX SCRFD face detector loaded: %s", detector_path)
+
+        if embedder_path and os.path.exists(embedder_path):
+            from desertfox.core.onnx_embedder import ArcFaceEmbedder
+            embedder = ArcFaceEmbedder(
+                model_path=embedder_path,
+                embedding_dim=config.embedding_dimension
+            )
+            logger.info("ONNX ArcFace embedder loaded: %s", embedder_path)
+
+    except Exception as e:
+        logger.warning("ONNX model auto-detection failed: %s — using fallback", e)
+
+    if detector is None:
+        detector = AdaptiveFaceDetector()
+        logger.info("Using fallback heuristic face detector (no ONNX model)")
+
+    if embedder is None:
+        embedder = VisualFeatureEmbedder(embedding_dim=config.embedding_dimension)
+        logger.info("Using fallback visual feature embedder (no ONNX model)")
+
+    return detector, embedder
+
 class DesertFoxEngine:
     def __init__(
         self,
@@ -40,8 +88,18 @@ class DesertFoxEngine:
         self.config = config or EngineConfig()
         self.vector_store_path = vector_store_path or self.config.vector_store_path
         self.similarity_threshold = self.config.similarity_threshold
-        self.embedder = embedder or VisualFeatureEmbedder(embedding_dim=self.config.embedding_dimension)
-        self.detector = detector or AdaptiveFaceDetector()
+
+        # Auto-detect ONNX models or use provided/fallback backends
+        if embedder and detector:
+            self.embedder = embedder
+            self.detector = detector
+        elif embedder or detector:
+            auto_det, auto_emb = _auto_detect_backend(self.config)
+            self.embedder = embedder or auto_emb
+            self.detector = detector or auto_det
+        else:
+            self.detector, self.embedder = _auto_detect_backend(self.config)
+
         self.optout_registry = ZeroKnowledgeOptOutRegistry(registry_file=optout_registry_path)
         self.harvester = AdvancedHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)

@@ -145,6 +145,13 @@ def generate_takedown(req: TakedownRequest):
             infringing_url=req.infringing_url,
             additional_notes=req.notes or ""
         )
+    elif req.notice_type.lower() == "ccpa":
+        notice = TakedownNoticeGenerator.generate_ccpa_deletion_request(
+            consumer_name=req.subject_name,
+            consumer_email=req.subject_email,
+            infringing_url=req.infringing_url,
+            additional_notes=req.notes or ""
+        )
     else:
         notice = TakedownNoticeGenerator.generate_dmca_notice(
             copyright_owner=req.subject_name,

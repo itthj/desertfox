@@ -1,7 +1,8 @@
 """
 Privacy defense and automated takedown notice generator for DesertFox.
 Allows individuals to generate formal GDPR (Article 17 Right to Erasure),
-CCPA, and DMCA takedown requests for discovered unauthorized photo exposure.
+CCPA (California Consumer Privacy Act), and DMCA takedown requests
+for discovered unauthorized photo exposure.
 """
 
 from datetime import datetime, timezone
@@ -81,5 +82,59 @@ The information in this notification is accurate, and under penalty of perjury, 
 Sincerely,
 {copyright_owner}
 Contact: {contact_email}
+"""
+        return notice.strip()
+
+    @staticmethod
+    def generate_ccpa_deletion_request(
+        consumer_name: str,
+        consumer_email: str,
+        infringing_url: str,
+        consumer_state: str = "California",
+        additional_notes: str = ""
+    ) -> str:
+        """
+        Generates a California Consumer Privacy Act (CCPA) §1798.105
+        right-to-delete request for unauthorized biometric / photographic data.
+        """
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        notice = f"""SUBJECT: Verified Consumer Request to Delete Personal Information (CCPA §1798.105)
+DATE: {date_str}
+TO: Privacy Officer / Data Protection Contact
+
+Dear Sir or Madam,
+
+I am a {consumer_state} resident exercising my right to deletion of personal information under the California Consumer Privacy Act of 2018 (Cal. Civ. Code §1798.100 et seq., as amended by the CPRA).
+
+1. IDENTIFICATION OF PERSONAL INFORMATION:
+My biometric and photographic personal information is published without my authorization at:
+Target URL: {infringing_url}
+
+2. LEGAL BASIS FOR DELETION:
+Under CCPA §1798.105(a), a consumer has the right to request that a business delete any personal information about the consumer which the business has collected. Biometric information, including facial imagery and derived identifiers, constitutes "personal information" under §1798.140(v)(1)(E).
+
+Upon receiving a verifiable consumer request, the business must delete the consumer's personal information from its records and direct any service providers or contractors to delete the consumer's personal information from their records (§1798.105(c)).
+
+3. EXCEPTIONS REVIEW:
+I have reviewed the exceptions listed in §1798.105(d) and believe none apply to this data. The images in question were not collected for a transaction, are not necessary to detect security incidents, and are not required for internal uses reasonably aligned with my expectations as a consumer.
+
+4. VERIFICATION:
+I am prepared to verify my identity as the consumer whose data is the subject of this request, in accordance with §1798.140(ak) and the regulations adopted pursuant to §1798.185.
+
+5. REQUIRED ACTION:
+I formally request that you:
+a) Delete all copies of the specified biometric/photographic data and associated personal information within 45 days (§1798.105(b)).
+b) Notify all service providers, contractors, and third parties to whom you disclosed this data to also delete it (§1798.105(c)).
+c) Confirm completion of deletion in writing.
+
+6. NON-DISCRIMINATION:
+Pursuant to §1798.125, I expect that exercising this right will not result in any discriminatory treatment, including denial of goods or services, different pricing, or different quality.
+
+{f"Additional Notes: {additional_notes}" if additional_notes else ""}
+
+Sincerely,
+{consumer_name}
+Contact Email: {consumer_email}
+Resident of: {consumer_state}
 """
         return notice.strip()

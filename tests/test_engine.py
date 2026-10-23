@@ -172,10 +172,32 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertEqual(len(h), 64)  # Valid SHA-256 hex string
 
     def test_gdpr_dmca_notice_generation(self):
-        """Verify legal takedown notice generator"""
+        """Verify legal takedown notice generator (GDPR, DMCA, and CCPA)."""
         gdpr = TakedownNoticeGenerator.generate_gdpr_erasure_request("Jane Doe", "jane@example.com", "https://leak.example/img.jpg")
         self.assertIn("GDPR Article 17", gdpr)
         self.assertIn("https://leak.example/img.jpg", gdpr)
+
+        dmca = TakedownNoticeGenerator.generate_dmca_notice("Jane Doe", "jane@example.com", "https://leak.example/img.jpg")
+        self.assertIn("17 U.S.C. § 512(c)", dmca)
+
+        ccpa = TakedownNoticeGenerator.generate_ccpa_deletion_request("Jane Doe", "jane@example.com", "https://leak.example/img.jpg")
+        self.assertIn("CCPA §1798.105", ccpa)
+        self.assertIn("https://leak.example/img.jpg", ccpa)
+
+    def test_model_registry_and_config(self):
+        """Verify ONNX model registry entries and configuration defaults."""
+        from desertfox.models.download import MODEL_REGISTRY, DEFAULT_DETECTOR, DEFAULT_EMBEDDER
+        from desertfox.config import EngineConfig
+
+        self.assertIn(DEFAULT_DETECTOR, MODEL_REGISTRY)
+        self.assertIn(DEFAULT_EMBEDDER, MODEL_REGISTRY)
+        self.assertEqual(MODEL_REGISTRY[DEFAULT_DETECTOR]["type"], "detector")
+        self.assertEqual(MODEL_REGISTRY[DEFAULT_EMBEDDER]["type"], "embedder")
+
+        cfg = EngineConfig()
+        self.assertEqual(cfg.embedding_dimension, 512)
+        self.assertIsNone(cfg.detector_model_path)
+        self.assertIsNone(cfg.embedder_model_path)
 
     def test_engine_pipeline_and_cli_methods(self):
         """Verify DesertFoxEngine end-to-end indexing, search array, and persistence."""

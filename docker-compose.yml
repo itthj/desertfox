@@ -1,0 +1,52 @@
+# ==============================================================================
+# DesertFox Docker Compose — Development & Production Deployment
+# ==============================================================================
+#
+# Usage:
+#   docker compose up              # Start the HUD web application
+#   docker compose up -d           # Start in background (detached)
+#   docker compose --profile models up  # Start + download ONNX models first
+#   docker compose down            # Stop all services
+#
+# Access the Cyber-OSINT HUD at: http://localhost:8000
+# ==============================================================================
+
+services:
+  desertfox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: desertfox-engine
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist vector store index and opt-out registry across restarts
+      - desertfox-data:/app/data
+      # Mount model weights so they persist and can be pre-downloaded
+      - desertfox-models:/app/desertfox/models/weights
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: one-shot model downloader
+  model-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: desertfox-model-downloader
+    profiles:
+      - models
+    volumes:
+      - desertfox-models:/app/desertfox/models/weights
+    command: ["python3", "-m", "desertfox.models.download", "--model", "all"]
+
+volumes:
+  desertfox-data:
+    driver: local
+  desertfox-models:
+    driver: local

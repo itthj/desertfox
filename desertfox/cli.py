@@ -32,7 +32,7 @@ def main():
     td_parser.add_argument("--url", type=str, required=True, help="URL where unauthorized image was located")
     td_parser.add_argument("--name", type=str, required=True, help="Subject's full legal name")
     td_parser.add_argument("--email", type=str, required=True, help="Subject's contact email")
-    td_parser.add_argument("--type", choices=["gdpr", "dmca"], default="gdpr", help="Type of legal notice")
+    td_parser.add_argument("--type", choices=["gdpr", "dmca", "ccpa"], default="gdpr", help="Type of legal notice")
 
     # Subcommand: serve
     serve_parser = subparsers.add_parser("serve", help="Launch the DesertFox Cyber-OSINT HUD Web Application")
@@ -87,6 +87,12 @@ def main():
             notice = TakedownNoticeGenerator.generate_gdpr_erasure_request(
                 subject_name=args.name,
                 subject_email=args.email,
+                infringing_url=args.url
+            )
+        elif args.type == "ccpa":
+            notice = TakedownNoticeGenerator.generate_ccpa_deletion_request(
+                consumer_name=args.name,
+                consumer_email=args.email,
                 infringing_url=args.url
             )
         else:

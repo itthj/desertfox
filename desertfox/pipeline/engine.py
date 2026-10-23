@@ -193,7 +193,6 @@ class DesertFoxEngine:
             }
 
         if only_enrolled:
-            # compatibility no-op for broader crawl mode
             pass
 
         if dhash:
@@ -364,16 +363,27 @@ class DesertFoxEngine:
                 break
         return urls
 
-    def audit_sites(
+    def discover_candidate_pages(
         self,
         seed_urls: List[str],
-        max_pages: int = 30,
-        max_images: int = 10,
+        query: Optional[str] = None,
         max_sites: int = 10,
+        max_pages: int = 30,
+        max_depth: int = 2,
     ) -> Dict[str, Any]:
+        """Phase 1 + 2: expand a broad but bounded candidate discovery set and aggregate pages."""
         seeds: List[str] = []
         seen_seeds: set[str] = set()
-        for candidate in (seed_urls or []):
+
+        if query:
+            for candidate in self.expand_seed_urls_from_query(query, limit=max(10, max_sites * 10)):
+                if candidate not in seen_seeds:
+                    seen_seeds.add(candidate)
+                    seeds.append(candidate)
+                if len(seeds) >= max_sites:
+                    break
+
+        for candidate in seed_urls or []:
             normalized = normalize_url(candidate)
             if normalized and normalized not in seen_seeds:
                 seen_seeds.add(normalized)
@@ -382,32 +392,46 @@ class DesertFoxEngine:
                 break
 
         if not seeds:
-            return {
-                "status": "error",
-                "message": "No valid seed URLs supplied for the extended audit.",
-                "newly_indexed_images": 0,
-                "pages": [],
-            }
+            return {"status": "error", "message": "No valid seed URLs supplied for the extended audit.", "seed_urls": [], "pages": [], "pages_discovered": 0}
 
         all_pages: List[str] = []
         seen_pages: set[str] = set()
+        total_skipped_robots = 0
+
         for seed in seeds:
             crawler = SiteCrawler(
                 user_agent=self.harvester.headers["User-Agent"],
                 delay_s=max(self.config.rate_limit_ms, 0) / 1000.0,
             )
-            discovered = crawler.discover(seed, max_pages=max_pages, max_depth=self.config.audit_max_depth)
+            discovered = crawler.discover(seed, max_pages=max_pages, max_depth=max_depth)
             if discovered.get("error"):
+                logger.warning("Site discovery failed for %s: %s", seed, discovered.get("error"))
                 continue
+            total_skipped_robots += int(discovered.get("skipped_robots", 0))
             for page in discovered.get("pages", []):
                 if page not in seen_pages:
                     seen_pages.add(page)
                     all_pages.append(page)
 
+        return {
+            "status": "success",
+            "seed_urls": seeds,
+            "pages": all_pages,
+            "pages_discovered": len(all_pages),
+            "pages_skipped_robots": total_skipped_robots,
+        }
+
+    def index_discovered_pages(
+        self,
+        pages: List[str],
+        max_images: int = 10,
+    ) -> Dict[str, Any]:
+        """Phase 3: crawl each discovered page and index any extracted faces."""
         reports = []
         total_indexed = 0
         skipped_other_faces = 0
-        for page in all_pages:
+
+        for page in pages:
             try:
                 result = self.crawl_and_index_target(
                     page,
@@ -436,12 +460,83 @@ class DesertFoxEngine:
 
         return {
             "status": "success",
-            "seed_urls": seeds,
-            "pages_discovered": len(all_pages),
-            "pages_skipped_robots": 0,
             "newly_indexed_images": total_indexed,
             "skipped_other_faces": skipped_other_faces,
             "pages": reports,
+        }
+
+    def reverse_search_probe(
+        self,
+        probe_image: Image.Image,
+        seed_urls: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        max_sites: int = 10,
+        max_pages: int = 30,
+        max_images: int = 10,
+        top_k: int = 10,
+        threshold: float = 0.60,
+    ) -> Dict[str, Any]:
+        """Phase 3 + 4: discover candidate pages, index faces from them, then run the reverse match."""
+        discovery = self.discover_candidate_pages(
+            seed_urls=(seed_urls or []),
+            query=query,
+            max_sites=max_sites,
+            max_pages=max_pages,
+        )
+        if discovery.get("status") == "error":
+            return {
+                "status": "error",
+                "message": discovery.get("message", "No valid seeds or search results were available."),
+                "matches": [],
+            }
+
+        indexing = self.index_discovered_pages(discovery["pages"], max_images=max_images)
+        matches = self.search_probe_image(
+            probe_image=probe_image,
+            top_k=top_k,
+            threshold=threshold,
+        )
+
+        return {
+            "status": "success",
+            "seed_urls": discovery["seed_urls"],
+            "pages_discovered": discovery["pages_discovered"],
+            "images_indexed": indexing["newly_indexed_images"],
+            "pages": indexing["pages"],
+            "total_matches": matches.get("total_matches", 0),
+            "matches": matches.get("matches", []),
+            "probe_telemetry": matches.get("probe_telemetry", {}),
+        }
+
+    def audit_sites(
+        self,
+        seed_urls: List[str],
+        max_pages: int = 30,
+        max_images: int = 10,
+        max_sites: int = 10,
+    ) -> Dict[str, Any]:
+        discovery = self.discover_candidate_pages(
+            seed_urls=seed_urls,
+            max_sites=max_sites,
+            max_pages=max_pages,
+        )
+        if discovery.get("status") == "error":
+            return {
+                "status": "error",
+                "message": discovery.get("message", "No valid seed URLs supplied for the extended audit."),
+                "newly_indexed_images": 0,
+                "pages": [],
+            }
+
+        indexing = self.index_discovered_pages(discovery["pages"], max_images=max_images)
+        return {
+            "status": "success",
+            "seed_urls": discovery["seed_urls"],
+            "pages_discovered": discovery["pages_discovered"],
+            "pages_skipped_robots": discovery["pages_skipped_robots"],
+            "newly_indexed_images": indexing["newly_indexed_images"],
+            "skipped_other_faces": indexing["skipped_other_faces"],
+            "pages": indexing["pages"],
         }
 
     def audit_site(self, seed_url: str, max_pages: Optional[int] = None, max_images: int = 10) -> Dict[str, Any]:

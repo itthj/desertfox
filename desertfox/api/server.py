@@ -35,6 +35,17 @@ class SearchRequest(BaseModel):
     threshold: float = Field(0.60, ge=0.1, le=1.0)
     top_k: int = Field(10, ge=1, le=50)
 
+class SearchReverseRequest(BaseModel):
+    image_base64: str = Field(..., description="Probe image to reverse-search against discovered public web faces.")
+    seed_url: Optional[str] = Field(None, min_length=3, max_length=500, description="Primary site to seed discovery from.")
+    seed_urls: List[str] = Field(default_factory=list, description="Additional candidate sites to include.")
+    search_query: Optional[str] = Field(None, max_length=200, description="Optional query to expand discovery to additional sites.")
+    top_k: int = Field(10, ge=1, le=50)
+    threshold: float = Field(0.60, ge=0.1, le=1.0)
+    max_pages: int = Field(30, ge=1, le=200)
+    max_images: int = Field(10, ge=1, le=50)
+    max_sites: int = Field(10, ge=1, le=50)
+
 class IndexImageRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to index")
     record_id: str
@@ -122,6 +133,42 @@ def search_probe(req: SearchRequest):
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
 
 
+@app.post("/api/search/reverse")
+def search_reverse_probe(req: SearchReverseRequest):
+    """Phase 3 + 4: search across a bounded set of candidate URLs, index discovered faces, and reverse-match the supplied probe."""
+    try:
+        image, _digest = decode_base64_payload(req.image_base64)
+        seed_candidates: List[str] = []
+        for item in req.seed_urls:
+            if item and item not in seed_candidates:
+                seed_candidates.append(item)
+        if req.seed_url:
+            seed_candidates.insert(0, req.seed_url)
+        if req.search_query:
+            expanded = engine.expand_seed_urls_from_query(req.search_query, limit=max(10, req.max_sites * 10))
+            for url in expanded:
+                if url not in seed_candidates:
+                    seed_candidates.append(url)
+        if not seed_candidates:
+            raise HTTPException(status_code=400, detail="No seed URLs or search query were supplied for reverse search.")
+
+        result = engine.reverse_search_probe(
+            probe_image=image,
+            seed_urls=seed_candidates[: req.max_sites],
+            query=req.search_query,
+            max_sites=req.max_sites,
+            max_pages=req.max_pages,
+            max_images=req.max_images,
+            top_k=req.top_k,
+            threshold=req.threshold,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Reverse search failed: {str(e)}")
+
+
 @app.post("/api/index/image")
 def index_single_image(req: IndexImageRequest):
     """Indexes a single image into the database."""
@@ -153,7 +200,7 @@ def audit_site(req: AuditRequest):
         if req.seed_url:
             seed_candidates.insert(0, req.seed_url)
         if req.search_query:
-            expanded = engine.expand_seed_urls_from_query(req.search_query, limit=req.max_sites * 10)
+            expanded = engine.expand_seed_urls_from_query(req.search_query, limit=max(10, req.max_sites * 10))
             for url in expanded:
                 if url not in seed_candidates:
                     seed_candidates.append(url)

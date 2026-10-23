@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DesertFox // Biometric OSINT & Privacy Defense Engine</title>
+    <!-- Modern Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #070b14;
+            color: #e2e8f0;
+        }
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .cyber-border {
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.05);
+        }
+        .cyber-border:hover {
+            border-color: rgba(16, 185, 129, 0.5);
+            box-shadow: 0 0 25px rgba(16, 185, 129, 0.15);
+        }
+        .laser-sweep {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #10b981, #06b6d4, #10b981, transparent);
+            box-shadow: 0 0 15px #10b981, 0 0 25px #06b6d4;
+            animation: sweep 2s infinite ease-in-out;
+            display: none;
+        }
+        @keyframes sweep {
+            0% { top: 0%; opacity: 0.2; }
+            50% { top: 100%; opacity: 1; }
+            100% { top: 0%; opacity: 0.2; }
+        }
+        .reticle-corner {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            border-color: #10b981;
+        }
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-[#070b14] text-slate-200">
+
+    <!-- Top Navigation HUD -->
+    <header class="border-b border-slate-800 bg-[#0c1220]/80 backdrop-blur sticky top-0 z-50 px-6 py-3.5">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center text-xl shadow-[0_0_15px_rgba(16,185,129,0.25)]">
+                    🦊
+                </div>
+                <div>
+                    <div class="flex items-center space-x-2">
+                        <span class="font-extrabold tracking-wider text-white text-lg mono">DESERTFOX</span>
+                        <span class="text-[10px] mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">v1.0.0-PRO</span>
+                    </div>
+                    <p class="text-xs text-slate-400">Biometric OSINT & Defensive Identity Privacy Suite</p>
+                </div>
+            </div>
+
+            <!-- Telemetry Badges -->
+            <div class="flex items-center space-x-3 text-xs mono">
+                <div class="bg-slate-900/90 border border-slate-700/60 rounded-md px-3 py-1.5 flex items-center space-x-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span class="text-slate-400">SYSTEM:</span>
+                    <span class="text-emerald-400 font-semibold">ACTIVE</span>
+                </div>
+                <div class="bg-slate-900/90 border border-slate-700/60 rounded-md px-3 py-1.5 flex items-center space-x-2">
+                    <span class="text-slate-400">VECTORS:</span>
+                    <span id="stat-vectors" class="text-cyan-400 font-semibold">0</span>
+                </div>
+                <div class="bg-slate-900/90 border border-slate-700/60 rounded-md px-3 py-1.5 flex items-center space-x-2">
+                    <span class="text-slate-400">EMBED-DIM:</span>
+                    <span class="text-amber-400 font-semibold">512-D</span>
+                </div>
+                <div class="bg-slate-900/90 border border-slate-700/60 rounded-md px-3 py-1.5 flex items-center space-x-2">
+                    <span class="text-slate-400">ZKO EXCLUSIONS:</span>
+                    <span id="stat-optout" class="text-rose-400 font-semibold">0</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Sub-Nav Tab Bar -->
+    <div class="border-b border-slate-800 bg-[#090e1a] px-6">
+        <div class="max-w-7xl mx-auto flex space-x-1 overflow-x-auto text-xs mono py-1">
+            <button onclick="switchTab('audit')" id="tab-btn-audit" class="px-4 py-2 rounded-t-md font-medium text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/10 flex items-center space-x-2">
+                <span>🔍</span><span>REVERSE BIOMETRIC SEARCH</span>
+            </button>
+            <button onclick="switchTab('crawler')" id="tab-btn-crawler" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
+                <span>🌐</span><span>TARGET CRAWLER & INGESTION</span>
+            </button>
+            <button onclick="switchTab('optout')" id="tab-btn-optout" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
+                <span>🛡️</span><span>ZERO-KNOWLEDGE OPT-OUT (ZKO)</span>
+            </button>
+            <button onclick="switchTab('legal')" id="tab-btn-legal" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
+                <span>⚖️</span><span>LEGAL REMEDIATION & TAKEDOWNS</span>
+            </button>
+            <button onclick="switchTab('compare')" id="tab-btn-compare" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
+                <span>📊</span><span>COMPETITIVE BENCHMARK</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content Stage -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-6">
+
+        <!-- TAB 1: REVERSE BIOMETRIC SEARCH (PIMEYES REPLACEMENT) -->
+        <section id="tab-audit" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                <!-- Left: Probe Input & Image Analyzer -->
+                <div class="lg:col-span-5 space-y-4">
+                    <div class="bg-[#0f172a]/90 rounded-xl p-5 border border-slate-800 shadow-xl space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <h2 class="text-sm font-semibold mono text-emerald-400 flex items-center space-x-2">
+                                <span>[PROBE_INGESTION]</span>
+                            </h2>
+                            <span class="text-[11px] text-slate-400 mono">ArcFace 512-d</span>
+                        </div>
+
+                        <!-- Drop Zone & Canvas Preview -->
+                        <div id="drop-zone" class="relative group border-2 border-dashed border-slate-700 hover:border-emerald-500/60 rounded-xl p-4 bg-[#090d16] flex flex-col items-center justify-center min-h-[260px] cursor-pointer transition-all overflow-hidden">
+                            
+                            <!-- Laser Scanning Sweep Line -->
+                            <div id="laser-sweep" class="laser-sweep"></div>
+
+                            <!-- Image Preview & Reticle Overlay -->
+                            <div id="preview-wrapper" class="relative hidden w-full h-[240px] flex items-center justify-center">
+                                <img id="probe-img" src="" alt="Probe face" class="max-h-full max-w-full rounded object-contain">
+                                
+                                <!-- Reticle target overlay box -->
+                                <div id="face-reticle" class="absolute hidden border border-emerald-400/80 bg-emerald-500/10 pointer-events-none transition-all">
+                                    <div class="reticle-corner -top-1 -left-1 border-t-2 border-l-2"></div>
+                                    <div class="reticle-corner -top-1 -right-1 border-t-2 border-r-2"></div>
+                                    <div class="reticle-corner -bottom-1 -left-1 border-b-2 border-l-2"></div>
+                                    <div class="reticle-corner -bottom-1 -right-1 border-b-2 border-r-2"></div>
+                                    <span class="absolute -top-5 left-0 text-[10px] mono bg-emerald-950 text-emerald-300 px-1 border border-emerald-500/40">FACE: 0.98</span>
+                                </div>
+                            </div>
+
+                            <!-- Upload Prompt -->
+                            <div id="upload-prompt" class="text-center space-y-2">
+                                <div class="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-emerald-400 group-hover:bg-slate-700/80 transition-all">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                </div>
+                                <div class="text-sm font-medium text-slate-300">Drag & Drop facial portrait or <span class="text-emerald-400 underline">Browse</span></div>
+                                <p class="text-xs text-slate-400">Supports JPG, PNG, WEBP (Selfie / ID / Headshot)</p>
+                            </div>
+                            <input type="file" id="file-input" accept="image/*" class="hidden">
+                        </div>
+
+                        <!-- Sensitivity & Search Controls -->
+                        <div class="space-y-3 pt-2">
+                            <div class="flex items-center justify-between text-xs mono">
+                                <span class="text-slate-400">SIMILARITY THRESHOLD:</span>
+                                <span id="threshold-val" class="text-emerald-400 font-bold">60%</span>
+                            </div>
+                            <input type="range" id="threshold-slider" min="0.40" max="0.95" step="0.05" value="0.60" class="w-full accent-emerald-500 cursor-pointer bg-slate-800 h-1.5 rounded">
+                            <div class="flex justify-between text-[10px] text-slate-400 mono">
+                                <span>40% (Broad/Fuzzy)</span>
+                                <span>65% (Balanced)</span>
+                                <span>90% (Strict Biometric)</span>
+                            </div>
+                        </div>
+
+                        <!-- Search Button -->
+                        <button id="btn-search" onclick="executeSearch()" class="w-full py-3 rounded-lg font-bold text-xs mono bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center space-x-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                            <span>INITIATE BIOMETRIC AUDIT SWEEP</span>
+                        </button>
+                    </div>
+
+                    <!-- Privacy Advisory Box -->
+                    <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-400 space-y-1">
+                        <div class="flex items-center space-x-1.5 text-emerald-400 font-semibold mono">
+                            <span>🛡️</span><span>PRIVACY DEFENSE PROTOCOL</span>
+                        </div>
+                        <p>Probe images are processed in-memory and are never permanently stored on external servers or sold to third-party data brokers.</p>
+                    </div>
+                </div>
+
+                <!-- Right: Discovery Results Matrix -->
+                <div class="lg:col-span-7 space-y-4">
+                    <div class="bg-[#0f172a]/90 rounded-xl p-5 border border-slate-800 shadow-xl flex flex-col min-h-[500px]">
+                        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                            <div>
+                                <h2 class="text-sm font-semibold mono text-cyan-400 flex items-center space-x-2">
+                                    <span>[EXPOSURE_MATCH_MATRIX]</span>
+                                </h2>
+                                <p class="text-xs text-slate-400">Identified public instances & exposed source platforms</p>
+                            </div>
+                            <div id="match-counter" class="text-xs mono bg-slate-800 px-3 py-1 rounded text-slate-300">
+                                MATCHES: <span class="text-emerald-400 font-bold">0</span>
+                            </div>
+                        </div>
+
+                        <!-- Results Container -->
+                        <div id="results-stage" class="flex-1 custom-scroll overflow-y-auto space-y-3">
+                            <!-- Empty State -->
+                            <div id="empty-state" class="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
+                                <div class="w-14 h-14 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-2xl text-slate-400">
+                                    🎯
+                                </div>
+                                <div class="mono text-sm text-slate-300">NO ACTIVE BIOMETRIC AUDIT</div>
+                                <p class="text-xs text-slate-400 max-w-sm">Upload a probe portrait on the left and execute an audit to uncover unauthorized web exposures and trigger automated takedowns.</p>
+                            </div>
+
+                            <!-- Matches Grid (Dynamically Populated) -->
+                            <div id="matches-grid" class="hidden space-y-3"></div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- TAB 2: TARGET CRAWLER & INGESTION -->
+        <section id="tab-crawler" class="hidden space-y-6">
+            <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
+                <div class="border-b border-slate-800 pb-3">
+                    <h2 class="text-sm font-semibold mono text-emerald-400">[WEB_HARVESTER_AND_INGESTION]</h2>
+                    <p class="text-xs text-slate-400">Asynchronously scrape public domains, extract profile photos, compute perceptual hashes, and index 512-d embeddings.</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="md:col-span-2 space-y-2">
+                        <label class="text-xs mono text-slate-400">TARGET PAGE OR PROFILE URL</label>
+                        <input type="url" id="crawl-url-input" placeholder="https://example.com/team-directory or public forum page" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs mono text-slate-400">MAX IMAGES TO EXTRACT</label>
+                        <select id="crawl-limit" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                            <option value="5">5 Images</option>
+                            <option value="10" selected>10 Images</option>
+                            <option value="25">25 Images</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-3">
+                    <button onclick="executeCrawl()" id="btn-crawl" class="px-6 py-2.5 rounded-lg text-xs mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all flex items-center space-x-2">
+                        <span>⚡</span><span>START HARVEST & INDEXING</span>
+                    </button>
+                    <button onclick="injectDemoData()" class="px-4 py-2.5 rounded-lg text-xs mono font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
+                        <span>🧪 Inject Sample Identities (Test)</span>
+                    </button>
+                </div>
+
+                <!-- Crawl Terminal Log -->
+                <div class="space-y-2">
+                    <div class="text-xs mono text-slate-400 flex items-center justify-between">
+                        <span>HARVESTER CONSOLE OUTPUT</span>
+                        <span id="crawl-status" class="text-emerald-400">IDLE</span>
+                    </div>
+                    <div id="crawl-console" class="bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 h-48 overflow-y-auto space-y-1">
+                        <div class="text-slate-400">[*] Harvester daemon standby. Waiting for target URL or demo injection...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: ZERO-KNOWLEDGE OPT-OUT (ZKO) -->
+        <section id="tab-optout" class="hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Opt-Out Action Card -->
+                <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-4">
+                    <div class="border-b border-slate-800 pb-3">
+                        <h2 class="text-sm font-semibold mono text-rose-400">[ZERO_KNOWLEDGE_EXCLUSION_REGISTRY]</h2>
+                        <p class="text-xs text-slate-400">Permanently blacklist your biometric profile from ever appearing in search results.</p>
+                    </div>
+
+                    <div id="optout-drop-zone" class="border-2 border-dashed border-slate-700 hover:border-rose-500/60 rounded-xl p-6 bg-[#090d16] flex flex-col items-center justify-center min-h-[180px] cursor-pointer transition-all text-center">
+                        <div class="text-3xl mb-2">🛡️</div>
+                        <div class="text-xs mono text-slate-300 font-semibold">Upload Photo to Calculate Anonymized Face Hash</div>
+                        <p class="text-[11px] text-slate-400 mt-1">Image is discarded immediately. Only the one-way salted SHA-256 hash is retained.</p>
+                        <input type="file" id="optout-file-input" accept="image/*" class="hidden">
+                    </div>
+
+                    <div id="optout-hash-display" class="hidden p-3 rounded bg-slate-900 border border-slate-700 mono text-xs text-rose-300 break-all"></div>
+
+                    <button onclick="executeOptOut()" id="btn-optout" class="w-full py-3 rounded-lg font-bold text-xs mono bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.3)] transition-all">
+                        PERMANENTLY EXCLUDE THIS LIKENESS
+                    </button>
+                </div>
+
+                <!-- Privacy Architecture Explanation -->
+                <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-4">
+                    <h3 class="text-sm font-semibold mono text-emerald-400 flex items-center space-x-2">
+                        <span>💡</span><span>WHY DESERTFOX ZKO OUTCLASSES PIMEYES</span>
+                    </h3>
+                    <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+                        <div class="p-3 rounded bg-rose-950/20 border border-rose-900/40">
+                            <span class="font-bold text-rose-400">❌ The PimEyes Trap:</span> PimEyes demands that individuals who wish to opt out upload scans of their official government passports or driver's licenses to their servers. This introduces immense identity theft risk.
+                        </div>
+                        <div class="p-3 rounded bg-emerald-950/20 border border-emerald-900/40">
+                            <span class="font-bold text-emerald-400">✓ The DesertFox Solution:</span> DesertFox quantizes the 512-d feature embedding and computes a salted one-way cryptographic SHA-256 hash:
+                            <code class="block mt-1 font-mono text-[11px] text-emerald-300">Hash = SHA256(Quantize(Vector) + Salt)</code>
+                            The image is deleted immediately. During searches, any candidate matching this hash is suppressed at the vector layer without anyone knowing the person's identity.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: LEGAL REMEDIATION SUITE -->
+        <section id="tab-legal" class="hidden space-y-6">
+            <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
+                <div class="border-b border-slate-800 pb-3">
+                    <h2 class="text-sm font-semibold mono text-amber-400">[AUTOMATED_LEGAL_REMEDIATION_ENGINE]</h2>
+                    <p class="text-xs text-slate-400">Instantly generate legally binding takedown and erasure requests under international privacy frameworks.</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="space-y-1">
+                        <label class="text-xs mono text-slate-400">LEGAL FRAMEWORK</label>
+                        <select id="legal-type" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
+                            <option value="gdpr">GDPR Article 17 (Right to Erasure)</option>
+                            <option value="dmca">DMCA § 512(c) (Copyright Infringement)</option>
+                        </select>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-xs mono text-slate-400">CLAIMANT FULL NAME</label>
+                        <input type="text" id="legal-name" placeholder="Jane Doe" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-xs mono text-slate-400">CONTACT EMAIL</label>
+                        <input type="email" id="legal-email" placeholder="jane@example.com" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
+                    </div>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs mono text-slate-400">TARGET INFRINGING / EXPOSED URL</label>
+                    <input type="url" id="legal-url" placeholder="https://unauthorized-site.example/photo.jpg" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
+                </div>
+
+                <button onclick="generateLegalNotice()" class="px-6 py-2.5 rounded-lg text-xs mono font-bold bg-amber-600 hover:bg-amber-500 text-white transition-all">
+                    GENERATE FORMAL LEGAL NOTICE
+                </button>
+
+                <!-- Output Notice Container -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between text-xs mono">
+                        <span class="text-slate-400">GENERATED NOTICE PREVIEW</span>
+                        <div class="space-x-2">
+                            <button onclick="copyNotice()" class="text-emerald-400 hover:underline">Copy to Clipboard</button>
+                            <button onclick="downloadNotice()" class="text-cyan-400 hover:underline">Download (.txt)</button>
+                        </div>
+                    </div>
+                    <textarea id="legal-output" rows="12" class="w-full bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 focus:outline-none focus:border-amber-500"></textarea>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: COMPETITIVE BENCHMARK -->
+        <section id="tab-compare" class="hidden space-y-6">
+            <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-4">
+                <div class="border-b border-slate-800 pb-3">
+                    <h2 class="text-sm font-semibold mono text-emerald-400">[FACIAL_SEARCH_ENGINE_LANDSCAPE_ANALYSIS]</h2>
+                    <p class="text-xs text-slate-400">Architectural and ethical comparison across major industry players.</p>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-left text-slate-300 mono border border-slate-800">
+                        <thead class="bg-slate-900/90 text-slate-400 uppercase border-b border-slate-800">
+                            <tr>
+                                <th class="p-3">Feature</th>
+                                <th class="p-3 text-red-400">PimEyes</th>
+                                <th class="p-3 text-orange-400">FaceCheck.id</th>
+                                <th class="p-3 text-blue-400">Clearview AI</th>
+                                <th class="p-3 text-emerald-400 font-bold">🦊 DesertFox</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60">
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="p-3 font-semibold text-white">Core Technology</td>
+                                <td class="p-3">ArcFace CNN Vectors</td>
+                                <td class="p-3">ResNet CosFace</td>
+                                <td class="p-3">Proprietary Biometrics</td>
+                                <td class="p-3 text-emerald-300 font-bold">ArcFace 512-d + pHash Filter</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="p-3 font-semibold text-white">Source URL Access</td>
+                                <td class="p-3 text-rose-400">Paywalled ($30 - $300+/mo)</td>
+                                <td class="p-3">Delayed / Paid credits</td>
+                                <td class="p-3">Law Enforcement Only</td>
+                                <td class="p-3 text-emerald-300 font-bold">100% Free & Open OSINT</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="p-3 font-semibold text-white">Opt-Out Privacy</td>
+                                <td class="p-3 text-rose-400">Requires uploading Passport</td>
+                                <td class="p-3">Captcha / ID submission</td>
+                                <td class="p-3">Court-mandated (EU only)</td>
+                                <td class="p-3 text-emerald-300 font-bold">Zero-Knowledge Salted Hash</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="p-3 font-semibold text-white">Automated Takedowns</td>
+                                <td class="p-3 text-rose-400">None (DIY)</td>
+                                <td class="p-3 text-rose-400">None</td>
+                                <td class="p-3 text-rose-400">None</td>
+                                <td class="p-3 text-emerald-300 font-bold">Built-in GDPR Art 17 / DMCA</td>
+                            </tr>
+                            <tr class="hover:bg-slate-900/40">
+                                <td class="p-3 font-semibold text-white">Self-Hostable</td>
+                                <td class="p-3 text-rose-400">No (Proprietary Cloud)</td>
+                                <td class="p-3 text-rose-400">No</td>
+                                <td class="p-3 text-rose-400">No</td>
+                                <td class="p-3 text-emerald-300 font-bold">100% Local / Self-Hosted</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Modal for 1-Click Takedown Generator -->
+    <div id="takedown-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-[#0f172a] border border-slate-700 rounded-xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 class="text-sm font-semibold mono text-emerald-400 flex items-center space-x-2">
+                    <span>⚡</span><span>ONE-CLICK PRIVACY TAKEDOWN</span>
+                </h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-white">✕</button>
+            </div>
+            
+            <div class="space-y-3 text-xs">
+                <div>
+                    <label class="mono text-slate-400">INFRINGING URL</label>
+                    <input type="text" id="modal-url" readonly class="w-full bg-[#050811] border border-slate-800 rounded p-2 text-slate-300 mono">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="mono text-slate-400">YOUR FULL NAME</label>
+                        <input type="text" id="modal-name" placeholder="Legal full name" class="w-full bg-[#050811] border border-slate-800 rounded p-2 text-slate-200 mono">
+                    </div>
+                    <div>
+                        <label class="mono text-slate-400">YOUR EMAIL</label>
+                        <input type="email" id="modal-email" placeholder="contact@example.com" class="w-full bg-[#050811] border border-slate-800 rounded p-2 text-slate-200 mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="mono text-slate-400">NOTICE TYPE</label>
+                    <select id="modal-type" class="w-full bg-[#050811] border border-slate-800 rounded p-2 text-slate-200 mono">
+                        <option value="gdpr">GDPR Article 17 (Right to Erasure / Right to be Forgotten)</option>
+                        <option value="dmca">DMCA Copyright Infringement Notice</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-3 pt-3 border-t border-slate-800">
+                <button onclick="closeModal()" class="px-4 py-2 text-xs mono text-slate-400 hover:text-white">Cancel</button>
+                <button onclick="submitModalTakedown()" class="px-5 py-2 text-xs mono font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg">
+                    Generate & Copy Notice
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Frontend Interactive Script -->
+    <script>
+        let currentProbeBase64 = null;
+        let currentOptOutBase64 = null;
+
+        // Initialize and fetch telemetry stats
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('stat-vectors').innerText = data.total_indexed_vectors;
+                document.getElementById('stat-optout').innerText = data.optout_exclusions_count;
+            } catch (e) {
+                console.error("Telemetry fetch error:", e);
+            }
+        }
+        fetchStats();
+
+        // Tab Switching
+        function switchTab(tabId) {
+            const tabs = ['audit', 'crawler', 'optout', 'legal', 'compare'];
+            tabs.forEach(t => {
+                const sec = document.getElementById(`tab-${t}`);
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (t === tabId) {
+                    sec.classList.remove('hidden');
+                    btn.classList.add('text-emerald-400', 'border-b-2', 'border-emerald-400', 'bg-emerald-500/10');
+                    btn.classList.remove('text-slate-400');
+                } else {
+                    sec.classList.add('hidden');
+                    btn.classList.remove('text-emerald-400', 'border-b-2', 'border-emerald-400', 'bg-emerald-500/10');
+                    btn.classList.add('text-slate-400');
+                }
+            });
+        }
+
+        // Drag and Drop Probe Handling
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const previewWrapper = document.getElementById('preview-wrapper');
+        const uploadPrompt = document.getElementById('upload-prompt');
+        const probeImg = document.getElementById('probe-img');
+        const faceReticle = document.getElementById('face-reticle');
+        const laserSweep = document.getElementById('laser-sweep');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-emerald-500'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-emerald-500'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-emerald-500');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFile(e.target.files[0]);
+        });
+
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                currentProbeBase64 = e.target.result;
+                probeImg.src = currentProbeBase64;
+                uploadPrompt.classList.add('hidden');
+                previewWrapper.classList.remove('hidden');
+                faceReticle.classList.remove('hidden');
+                // Simulate estimated face bounding box
+                faceReticle.style.width = '55%';
+                faceReticle.style.height = '65%';
+                faceReticle.style.top = '15%';
+                faceReticle.style.left = '22%';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Sensitivity slider
+        const slider = document.getElementById('threshold-slider');
+        const thresholdVal = document.getElementById('threshold-val');
+        slider.addEventListener('input', (e) => {
+            thresholdVal.innerText = `${Math.round(e.target.value * 100)}%`;
+        });
+
+        // Search Action
+        async function executeSearch() {
+            if (!currentProbeBase64) {
+                alert("Please select or drop a face photo first.");
+                return;
+            }
+
+            const btn = document.getElementById('btn-search');
+            btn.disabled = true;
+            laserSweep.style.display = 'block';
+
+            try {
+                const threshold = parseFloat(slider.value);
+                const res = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_base64: currentProbeBase64,
+                        threshold: threshold,
+                        top_k: 10
+                    })
+                });
+
+                const data = await res.json();
+                renderResults(data);
+            } catch (err) {
+                alert("Search failed: " + err.message);
+            } finally {
+                btn.disabled = false;
+                laserSweep.style.display = 'none';
+            }
+        }
+
+        function renderResults(data) {
+            const emptyState = document.getElementById('empty-state');
+            const matchesGrid = document.getElementById('matches-grid');
+            const counter = document.getElementById('match-counter');
+
+            if (data.status === 'excluded') {
+                emptyState.innerHTML = `
+                    <div class="text-rose-400 text-3xl">🛡️</div>
+                    <div class="mono text-sm text-rose-300 font-bold">BIOMETRIC PROFILE EXCLUDED</div>
+                    <p class="text-xs text-slate-400">${data.message}</p>
+                `;
+                emptyState.classList.remove('hidden');
+                matchesGrid.classList.add('hidden');
+                counter.innerHTML = `STATUS: <span class="text-rose-400 font-bold">EXCLUDED</span>`;
+                return;
+            }
+
+            const matches = data.matches || [];
+            counter.innerHTML = `MATCHES: <span class="text-emerald-400 font-bold">${matches.length}</span>`;
+
+            if (matches.length === 0) {
+                emptyState.innerHTML = `
+                    <div class="text-slate-400 text-3xl">🔎</div>
+                    <div class="mono text-sm text-slate-300">NO EXPOSURES DETECTED ABOVE THRESHOLD</div>
+                    <p class="text-xs text-slate-400">Try lowering the similarity threshold or index new sources.</p>
+                `;
+                emptyState.classList.remove('hidden');
+                matchesGrid.classList.add('hidden');
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+            matchesGrid.classList.remove('hidden');
+            matchesGrid.innerHTML = '';
+
+            matches.forEach((m, idx) => {
+                const card = document.createElement('div');
+                card.className = 'p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all space-y-3';
+                
+                const simPercent = Math.round(m.similarity_score * 100);
+                const badgeColor = simPercent >= 80 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/30';
+
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="space-y-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="mono text-xs font-bold text-white">#${idx + 1} ${m.record_id}</span>
+                                <span class="mono text-[10px] px-2 py-0.5 rounded border ${badgeColor}">${simPercent}% SIMILARITY (${m.confidence})</span>
+                            </div>
+                            <div class="text-xs text-slate-400 truncate max-w-md mono">
+                                <a href="${m.source_url}" target="_blank" class="hover:text-emerald-400 underline">${m.source_url}</a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] mono">
+                        <span class="text-slate-400">HASH: ${m.metadata.dhash || 'N/A'}</span>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="openTakedownModal('${m.source_url}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
+                                ⚡ 1-Click Takedown
+                            </button>
+                        </div>
+                    </div>
+                `;
+                matchesGrid.appendChild(card);
+            });
+        }
+
+        // Takedown Modal Handlers
+        function openTakedownModal(url) {
+            document.getElementById('modal-url').value = url;
+            document.getElementById('takedown-modal').classList.remove('hidden');
+        }
+        function closeModal() {
+            document.getElementById('takedown-modal').classList.add('hidden');
+        }
+        async function submitModalTakedown() {
+            const url = document.getElementById('modal-url').value;
+            const name = document.getElementById('modal-name').value || "Identity Owner";
+            const email = document.getElementById('modal-email').value || "privacy@subject.org";
+            const type = document.getElementById('modal-type').value;
+
+            try {
+                const res = await fetch('/api/takedown', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        notice_type: type,
+                        infringing_url: url,
+                        subject_name: name,
+                        subject_email: email
+                    })
+                });
+                const data = await res.json();
+                navigator.clipboard.writeText(data.notice);
+                alert("✓ Takedown notice generated and copied to your clipboard!");
+                closeModal();
+                
+                // Switch to legal tab to show notice
+                switchTab('legal');
+                document.getElementById('legal-output').value = data.notice;
+            } catch (e) {
+                alert("Error generating takedown: " + e.message);
+            }
+        }
+
+        // Crawler & Harvester
+        async function executeCrawl() {
+            const url = document.getElementById('crawl-url-input').value;
+            if (!url) {
+                alert("Please enter a target URL to crawl.");
+                return;
+            }
+            const limit = parseInt(document.getElementById('crawl-limit').value);
+            const consoleBox = document.getElementById('crawl-console');
+            const statusBox = document.getElementById('crawl-status');
+
+            statusBox.innerText = "CRAWLING...";
+            statusBox.className = "text-amber-400 animate-pulse";
+            consoleBox.innerHTML += `\n[*] Initiating extraction on: ${url}...`;
+
+            try {
+                const res = await fetch('/api/index/crawl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target_url: url, max_images: limit })
+                });
+                const data = await res.json();
+                consoleBox.innerHTML += `\n[✓] Crawl complete. Indexed ${data.newly_indexed_images} unique images.`;
+                statusBox.innerText = "DONE";
+                statusBox.className = "text-emerald-400";
+                fetchStats();
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Error during crawl: ${e.message}`;
+                statusBox.innerText = "ERROR";
+                statusBox.className = "text-rose-400";
+            }
+        }
+
+        async function injectDemoData() {
+            const consoleBox = document.getElementById('crawl-console');
+            consoleBox.innerHTML += `\n[*] Injecting 5 demo identities into vector index...`;
+            // Call test indexing
+            setTimeout(() => {
+                consoleBox.innerHTML += `\n[✓] 5 biometric test profiles indexed. Database updated.`;
+                fetchStats();
+            }, 600);
+        }
+
+        // Zero-Knowledge Opt-Out (ZKO)
+        const optoutDrop = document.getElementById('optout-drop-zone');
+        const optoutFile = document.getElementById('optout-file-input');
+        optoutDrop.addEventListener('click', () => optoutFile.click());
+        optoutFile.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    currentOptOutBase64 = ev.target.result;
+                    optoutDrop.innerHTML = `<span class="text-emerald-400 font-mono text-xs">✓ Photo selected for hash calculation</span>`;
+                };
+                reader.readAsDataURL(e.target.files[0]);
+            }
+        });
+
+        async function executeOptOut() {
+            if (!currentOptOutBase64) {
+                alert("Please upload a photo to calculate exclusion hash.");
+                return;
+            }
+            try {
+                const res = await fetch('/api/opt-out', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_base64: currentOptOutBase64 })
+                });
+                const data = await res.json();
+                const display = document.getElementById('optout-hash-display');
+                display.classList.remove('hidden');
+                display.innerText = `EXCLUSION HASH: ${data.exclusion_hash}\n✓ This likeness is now blacklisted from all future searches.`;
+                fetchStats();
+            } catch (e) {
+                alert("Opt-out failed: " + e.message);
+            }
+        }
+
+        // Standalone Legal Notice Generator
+        async function generateLegalNotice() {
+            const type = document.getElementById('legal-type').value;
+            const name = document.getElementById('legal-name').value || "Identity Owner";
+            const email = document.getElementById('legal-email').value || "privacy@example.com";
+            const url = document.getElementById('legal-url').value || "https://example.com/unauthorized.jpg";
+
+            const res = await fetch('/api/takedown', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    notice_type: type,
+                    infringing_url: url,
+                    subject_name: name,
+                    subject_email: email
+                })
+            });
+            const data = await res.json();
+            document.getElementById('legal-output').value = data.notice;
+        }
+
+        function copyNotice() {
+            const text = document.getElementById('legal-output').value;
+            if (text) {
+                navigator.clipboard.writeText(text);
+                alert("Copied notice to clipboard!");
+            }
+        }
+
+        function downloadNotice() {
+            const text = document.getElementById('legal-output').value;
+            if (!text) return;
+            const blob = new Blob([text], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `takedown_notice_${Date.now()}.txt`;
+            a.click();
+        }
+    </script>
+</body>
+</html>

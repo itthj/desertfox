@@ -3,88 +3,118 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://python.org)
 [![OSINT Defense](https://img.shields.io/badge/Focus-OSINT%20Privacy%20Defense-orange.svg)]()
+[![FastAPI](https://img.shields.io/badge/UI-Cyber--OSINT%20HUD-emerald.svg)]()
 
-> **DesertFox** is an open-source reverse facial search and identity footprint auditing framework. It reconstructs the core architectural patterns of proprietary facial recognition search engines from first principles—combining state-of-the-art deep metric learning, vector search indexing, and automated privacy defense tools to help individuals monitor and protect their digital image footprint.
-
----
-
-## 🎯 The Problem & Mission
-
-Commercial facial search engines index billions of images scraped across the public internet. While they offer reverse image queries, they often operate behind expensive subscription paywalls, lack algorithmic transparency, and present significant privacy risks when used without consent.
-
-**DesertFox** shifts the paradigm from surveillance to **defensive OSINT**:
-1. **Footprint Auditing**: Empower users and security analysts to discover unauthorized, scraped, or leaked pictures across defined datasets and open web sources.
-2. **Actionable Privacy Remediation**: Automatically generate legally grounded privacy notices (GDPR Article 17 Right to Erasure, CCPA, and DMCA takedowns) for exposed images.
-3. **Privacy-Preserving Design**: Architecture designed with opt-out mechanisms and identity verification safeguards to prevent abuse as stalkerware.
+> **DesertFox** is an open-source reverse facial search, digital exposure auditing, and privacy remediation suite. It reconstructs the core architectural patterns of proprietary facial recognition search engines from first principles—combining state-of-the-art deep metric learning, vector indexing, an interactive Cyber-OSINT HUD, and automated privacy defense tools to help individuals monitor and protect their digital image footprint.
 
 ---
 
-## 🏛️ Architecture Overview
+## 🎯 The Mission: From Surveillance to Defense
 
-DesertFox decouples the facial search workflow into modular components:
+Commercial facial search engines (such as PimEyes, FaceCheck.id, and Clearview AI) crawl billions of images across the web. While technically powerful, they suffer from deep ethical and practical flaws:
+1. **Paywalled Transparency:** Charging victims $30 to $300+/month just to view where their stolen or non-consensual images are published.
+2. **Invasive Opt-Out Traps:** Forcing users to upload scans of government-issued passports or driver's licenses to request removal.
+3. **Zero Legal Remediation:** Leaving individuals with no automated tools to demand removal under international privacy laws.
+
+**DesertFox** solves these flaws by providing an open-source, self-hostable **defensive OSINT alternative**:
+* **Identity Footprint Auditing:** Search portrait photos across indexed web corpora and public registries using 512-dimensional vector similarity.
+* **Zero-Knowledge Opt-Out (ZKO):** Permanently blacklist your face likeness from search queries using salted, irreversible cryptographic hashes—**no identity documents required**.
+* **1-Click Legal Remediation:** Instantly generate formally formatted **GDPR Article 17 (Right to Erasure)** and **DMCA Copyright Takedown** notices.
+
+---
+
+## 🏛️ Architecture & Platform Comparison
 
 ```mermaid
 graph LR
-    A[Image Input / Crawl Stream] --> B[Face Detector & Landmark Align]
+    A[Image Ingestion / Web Crawl] --> B[Face Detector & Landmark Align]
     B --> C[ArcFace Deep Metric Embedder]
-    C --> D[512-d Embedding Vector]
+    C --> D[512-d Unit Hypersphere Vector]
     D --> E[Vector Store: FAISS / In-Memory]
-    F[Probe Query Photo] --> B
-    E --> G[Top-K Similarity Matcher]
-    G --> H[Auditing & Takedown Report Engine]
+    F[User Probe Photo] --> B
+    E --> G[Cosine Similarity Matcher]
+    G --> H[Privacy Audit & 1-Click Takedowns]
 ```
 
-Detailed technical breakdown, mathematical formulas, and benchmark comparisons are available in the [System Design Document](docs/SYSTEM_DESIGN.md).
+For an in-depth breakdown of how DesertFox compares against **PimEyes, Clearview AI, FaceCheck.id, and Google Lens**, read our [Competitive & Architectural Analysis](docs/COMPETITIVE_ANALYSIS.md). Mathematical derivations for ArcFace and vector indexing can be found in the [System Design Document](docs/SYSTEM_DESIGN.md).
 
 ---
 
 ## ⚡ Quickstart
 
 ### 1. Installation
-Clone the repository and install core dependencies:
+Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/itthj/desertfox.git
 cd desertfox
 pip install -r requirements.txt
 ```
 
-### 2. Basic Usage (CLI)
-
-#### Indexing an image or folder into the vector database:
+### 2. Launch the Cyber-OSINT HUD (Web Application)
+Start the local server and open your browser:
 ```bash
-python3 -m desertfox.cli index --source /path/to/crawled_images --store ./data/desertfox.index
+python3 -m desertfox.cli serve --host 127.0.0.1 --port 8000
+```
+Then navigate to **`http://127.0.0.1:8000`** to access the full Cyber-OSINT Web UI with:
+- Drag-and-drop face image scanner with animated reticle HUD
+- Real-time similarity cutoff adjustments
+- Live web page crawler & image extractor
+- Zero-Knowledge Opt-Out registry console
+- One-click GDPR/DMCA notice generator
+
+---
+
+### 3. Command-Line Interface (CLI)
+
+#### Index demo biometric profiles:
+```bash
+python3 -m desertfox.cli index-demo --count 5 --store ./data/desertfox.index
 ```
 
-#### Querying a probe photo to audit exposure:
+#### Run a test reverse search query:
 ```bash
-python3 -m desertfox.cli search --probe /path/to/my_face.jpg --store ./data/desertfox.index --threshold 0.65
+python3 -m desertfox.cli search-demo --store ./data/desertfox.index --threshold 0.60
 ```
 
-#### Generating a privacy takedown notice for found instances:
+#### Generate a formal GDPR Article 17 Erasure notice:
 ```bash
-python3 -m desertfox.cli takedown --target-url "https://example.com/unauthorized_profile.jpg" --subject-name "Jane Doe" --jurisdiction GDPR
+python3 -m desertfox.cli takedown \
+    --url "https://unauthorized-site.example/leaked.jpg" \
+    --name "Jane Doe" \
+    --email "jane@example.com" \
+    --type gdpr
 ```
 
 ---
 
-## 🛡️ Ethical & Legal OSINT Guidelines
+## 🧪 Unit Tests
+Run the test suite to verify embedding dimensions, perceptual hashing, vector search, and opt-out suppression:
+```bash
+python3 -m unittest discover -s tests
+```
 
-DesertFox is built as an educational and defensive security project:
-- **Authorized Use Only**: Designed for self-auditing, authorized digital footprint investigations, and legitimate OSINT research.
-- **No Mass Surveillance**: The system emphasizes rate-limiting, consent checks, and exclusion registries.
-- **Compliance**: Respects robots.txt, terms of service of indexed platforms, and international privacy laws.
+---
+
+## 🛡️ Ethical OSINT Principles
+
+DesertFox is built strictly as an educational and defensive security project:
+- **Authorized Use Only:** Designed for self-auditing, authorized digital footprint investigations, and security research.
+- **No Mass Surveillance:** Rate-limiting and Zero-Knowledge exclusion hashing prevent abuse as a stalkerware index.
+- **Data Sovereignty:** 100% self-hosted with zero telemetry sent to third parties.
 
 ---
 
 ## 🗺️ Project Roadmap
 
 - [x] Core architecture specification & metric learning design
-- [x] Vector storage interface (FAISS & In-Memory Cosine Similarity)
+- [x] Vector storage interface (Cosine Similarity & metadata indexing)
 - [x] Automated GDPR / DMCA takedown notice generator
-- [x] CLI for indexing and search auditing
-- [ ] ONNX-runtime integration for RetinaFace + ArcFace models
-- [ ] Distributed crawler module with perceptual hashing
-- [ ] FastWeb REST API & Web Dashboard
+- [x] Zero-Knowledge Opt-Out (ZKO) cryptographic registry
+- [x] Web harvester with `dHash` perceptual deduplication
+- [x] Interactive Cyber-OSINT HUD Web Application & REST API
+- [x] Unit test suite
+- [ ] ONNX-runtime weights connector for RetinaFace + InsightFace Buffalo_l
+- [ ] Distributed Celery/Redis crawler task queue
 
 ---
 

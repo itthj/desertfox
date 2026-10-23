@@ -34,6 +34,12 @@ def main():
     td_parser.add_argument("--email", type=str, required=True, help="Subject's contact email")
     td_parser.add_argument("--type", choices=["gdpr", "dmca"], default="gdpr", help="Type of legal notice")
 
+    # Subcommand: serve
+    serve_parser = subparsers.add_parser("serve", help="Launch the DesertFox Cyber-OSINT HUD Web Application")
+    serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface to bind to")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload on code change")
+
     args = parser.parse_args()
 
     if args.command == "index-demo":
@@ -92,6 +98,11 @@ def main():
         print("=" * 60)
         print(notice)
         print("=" * 60)
+
+    elif args.command == "serve":
+        import uvicorn
+        print(f"[*] Starting DesertFox Cyber-OSINT HUD on http://{args.host}:{args.port}")
+        uvicorn.run("desertfox.api.server:app", host=args.host, port=args.port, reload=args.reload)
 
 if __name__ == "__main__":
     main()

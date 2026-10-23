@@ -4,7 +4,7 @@ Allows individuals to generate formal GDPR (Article 17 Right to Erasure),
 CCPA, and DMCA takedown requests for discovered unauthorized photo exposure.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 class TakedownNoticeGenerator:
@@ -18,7 +18,7 @@ class TakedownNoticeGenerator:
         image_description: str = "Personal biometric facial photograph",
         additional_notes: str = ""
     ) -> str:
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         notice = f"""SUBJECT: Formal Request for Erasure (GDPR Article 17) - Unauthorized Personal Image
 DATE: {date_str}
 TO: Data Protection Officer / Site Administrator
@@ -59,7 +59,7 @@ Contact Email: {subject_email}
         infringing_url: str,
         original_work_description: str = "Original photographic portrait owned by claimant"
     ) -> str:
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         notice = f"""SUBJECT: Notice of Copyright Infringement pursuant to 17 U.S.C. § 512(c) (DMCA)
 DATE: {date_str}
 TO: Designated Copyright Agent

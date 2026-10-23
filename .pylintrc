@@ -1,0 +1,10 @@
+[MASTER]
+extension-pkg-allow-list=cv2
+
+
+[MESSAGES CONTROL]
+# Style/refactor noise; real-bug checks (errors, undefined names, etc.) stay on.
+disable=C,R,broad-exception-caught,raise-missing-from,unused-import,unused-variable,unused-argument,protected-access,redefined-outer-name,reimported,global-statement,cell-var-from-loop,unnecessary-pass,arguments-differ
+
+[TYPECHECK]
+ignored-modules=cv2

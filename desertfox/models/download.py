@@ -27,39 +27,25 @@ DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "weights")
 
 # Model registry: name → (url, filename, sha256, description)
 MODEL_REGISTRY: Dict[str, dict] = {
-    "scrfd_2.5g": {
-        "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/scrfd_2.5g_bnkps.onnx",
-        "filename": "scrfd_2.5g_bnkps.onnx",
-        "sha256": None,  # Will skip verification if None
-        "description": "SCRFD 2.5GF — Lightweight face detector with keypoints (2.5 GFLOPS)",
-        "type": "detector",
-    },
     "scrfd_10g": {
-        "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/scrfd_10g_bnkps.onnx",
+        "url": "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx",
         "filename": "scrfd_10g_bnkps.onnx",
         "sha256": None,
-        "description": "SCRFD 10GF — High-accuracy face detector with keypoints (10 GFLOPS)",
+        "description": "SCRFD 10GF — High-accuracy face detector with keypoints (Buffalo_l)",
         "type": "detector",
     },
-    "arcface_r100": {
-        "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/glint360k_r100FC_1.0.onnx",
-        "filename": "glint360k_r100FC_1.0.onnx",
-        "sha256": None,
-        "description": "ArcFace ResNet-100 — 512-d face embedding (Glint360K, state-of-the-art)",
-        "type": "embedder",
-    },
     "arcface_r50": {
-        "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/glint360k_r50.onnx",
-        "filename": "glint360k_r50.onnx",
+        "url": "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx",
+        "filename": "w600k_r50.onnx",
         "sha256": None,
-        "description": "ArcFace ResNet-50 — 512-d face embedding (Glint360K, lighter variant)",
+        "description": "ArcFace ResNet-50 — 512-d face embedding (WebFace600K / Buffalo_l)",
         "type": "embedder",
     },
 }
 
 # Default model selections
-DEFAULT_DETECTOR = "scrfd_2.5g"
-DEFAULT_EMBEDDER = "arcface_r100"
+DEFAULT_DETECTOR = "scrfd_10g"
+DEFAULT_EMBEDDER = "arcface_r50"
 
 
 def _progress_hook(block_num: int, block_size: int, total_size: int):

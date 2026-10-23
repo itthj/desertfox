@@ -26,7 +26,7 @@ class BKTree:
     @staticmethod
     def hamming_distance(val1: int, val2: int) -> int:
         """Fast bitwise XOR population count."""
-        return bin(val1 ^ val2).count("1")
+        return (val1 ^ val2).bit_count()
 
     def insert(self, hex_hash: str, payload: Optional[Dict[str, Any]] = None):
         """Inserts a 64-bit or 16-char hex hash into the metric tree."""

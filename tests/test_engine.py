@@ -272,6 +272,19 @@ class TestDesertFoxV2(unittest.TestCase):
             loaded_matches = loaded.search(vec1, top_k=5, threshold=0.70)
             self.assertEqual(loaded_matches[0].record_id, "faiss_rec_01")
 
+            ivf = FaissVectorIndex(embedding_dim=32, index_type="IVF", nlist=4)
+            rng = np.random.default_rng(11)
+            base = rng.standard_normal(32).astype(np.float32)
+            base /= np.linalg.norm(base)
+            for i in range(4):
+                noise = base + rng.standard_normal(32).astype(np.float32) * 0.01
+                ivf.add_record(f"ivf_{i}", noise, f"https://example.com/ivf{i}.jpg")
+            self.assertTrue(ivf.index.is_trained)
+            self.assertEqual(ivf.index.ntotal, 4)
+            ivf_hits = ivf.search(base, top_k=2, threshold=0.5)
+            self.assertGreaterEqual(len(ivf_hits), 1)
+            self.assertTrue(ivf_hits[0].record_id.startswith("ivf_"))
+
     def test_async_harvester_parsing(self):
         """Verify candidate extraction in AsyncMediaHarvester."""
         from desertfox.ingestion.async_harvester import AsyncMediaHarvester
@@ -303,6 +316,63 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertIn("desertfox.batch_crawl_targets", celery_app.tasks)
         self.assertEqual(crawl_and_index_task.name, "desertfox.crawl_and_index")
         self.assertEqual(batch_crawl_targets_task.name, "desertfox.batch_crawl_targets")
+
+    def test_vector_store_growth_and_legacy_load(self):
+        """Amortized append stays exact past the first capacity doubling, and legacy JSON still loads."""
+        import json
+        import tempfile
+
+        store = VectorStore(embedding_dim=8)
+        rng = np.random.default_rng(7)
+        for i in range(100):
+            store.add(f"id_{i}", rng.standard_normal(8).astype(np.float32), f"https://example.com/{i}")
+        self.assertEqual(store.vectors.shape, (100, 8))
+        query = store.vectors[40]
+        hits = store.search(query, top_k=3, threshold=0.1)
+        self.assertEqual(hits[0].record_id, "id_40")
+        self.assertAlmostEqual(hits[0].similarity, 1.0, places=3)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "compact.index")
+            store.save(path)
+            self.assertTrue(os.path.exists(path + ".npy"))
+            loaded = VectorStore.load(path)
+            self.assertEqual(len(loaded.records), 100)
+            self.assertEqual(loaded.search(query, top_k=1, threshold=0.5)[0].record_id, "id_40")
+
+            legacy_path = os.path.join(tmpdir, "legacy.index")
+            with open(legacy_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "dim": 8,
+                    "records": store.records,
+                    "vectors": store.vectors.tolist(),
+                }, handle)
+            legacy = VectorStore.load(legacy_path)
+            self.assertEqual(len(legacy.records), 100)
+            self.assertEqual(legacy.search(query, top_k=1, threshold=0.5)[0].record_id, "id_40")
+
+    def test_engine_skips_perceptual_duplicate(self):
+        """A second copy of the same image is dropped before it is embedded again."""
+        import tempfile
+        from desertfox.config import EngineConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "dup.index"), use_faiss=False)
+            engine = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+            sample = np.random.default_rng(3).integers(0, 256, (112, 112, 3), dtype=np.uint8)
+            first = engine.index_image_array(sample, "face_a", "https://example.com/a.jpg")
+            second = engine.index_image_array(sample, "face_b", "https://example.com/b.jpg")
+            self.assertTrue(first["success"])
+            self.assertFalse(second["success"])
+            self.assertEqual(second["duplicate_of"], "face_a")
+            self.assertEqual(len(engine.vector_store.records), 1)
+
+            probe = engine.search_probe_image(Image.fromarray(sample), top_k=5, threshold=0.5)
+            self.assertEqual(probe["status"], "success")
+            self.assertGreaterEqual(probe["total_matches"], 1)
+            self.assertIn("confidence", probe["matches"][0])
+            self.assertIn("l2_distance", probe["matches"][0])
+            self.assertEqual(probe["matches"][0]["record_id"], "face_a")
 
 if __name__ == "__main__":
     unittest.main()

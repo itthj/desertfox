@@ -43,19 +43,53 @@ class FaissVectorIndex:
         self.index_type = index_type
         self.nlist = nlist
         self.records: List[Dict[str, Any]] = []
+        self._pending: List[np.ndarray] = []
 
-        if index_type == "Flat":
-            # Inner Product on L2-normalized vectors = Cosine Similarity
-            self.index = faiss.IndexFlatIP(embedding_dim)
-        elif index_type == "HNSW":
-            # Graph-based HNSW for ultra-fast ANN
-            self.index = faiss.IndexHNSWFlat(embedding_dim, 32, faiss.METRIC_INNER_PRODUCT)
-        elif index_type == "IVF":
-            # Voronoi inverted list index
-            quantizer = faiss.IndexFlatIP(embedding_dim)
-            self.index = faiss.IndexIVFFlat(quantizer, embedding_dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        self._build_empty_index()
+
+    def _build_empty_index(self):
+        if self.index_type == "Flat":
+            self.index = faiss.IndexFlatIP(self.embedding_dim)
+        elif self.index_type == "HNSW":
+            self.index = faiss.IndexHNSWFlat(self.embedding_dim, 32, faiss.METRIC_INNER_PRODUCT)
+        elif self.index_type == "IVF":
+            quantizer = faiss.IndexFlatIP(self.embedding_dim)
+            nlist = max(1, self.nlist)
+            self.index = faiss.IndexIVFFlat(quantizer, self.embedding_dim, nlist, faiss.METRIC_INNER_PRODUCT)
+            self.index.nprobe = min(8, nlist)
         else:
-            self.index = faiss.IndexFlatIP(embedding_dim)
+            self.index = faiss.IndexFlatIP(self.embedding_dim)
+
+    def _is_ivf(self) -> bool:
+        return isinstance(self.index, faiss.IndexIVF)
+
+    @staticmethod
+    def _normalize(vector: np.ndarray) -> np.ndarray:
+        v = np.ascontiguousarray(vector, dtype=np.float32)
+        norm = float(np.linalg.norm(v))
+        if norm > 0:
+            v = v / norm
+        return v
+
+    def _normalize_matrix(self, vectors: np.ndarray) -> np.ndarray:
+        mat = np.ascontiguousarray(vectors, dtype=np.float32)
+        if mat.ndim == 1:
+            mat = mat.reshape(1, -1)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return mat / norms
+
+    def _train_and_flush(self) -> None:
+        """Train an IVF index once enough vectors exist, then add the buffered rows."""
+        if not self._pending:
+            return
+        mat = np.vstack(self._pending)
+        if self._is_ivf() and not self.index.is_trained:
+            if len(mat) < self.index.nlist:
+                return
+            self.index.train(mat)
+        self.index.add(mat)
+        self._pending.clear()
 
     def add_record(
         self,
@@ -65,27 +99,34 @@ class FaissVectorIndex:
         metadata: Optional[Dict[str, Any]] = None
     ):
         """Adds a normalized face vector and source metadata to the FAISS index."""
-        v = vector.astype(np.float32)
-        norm = np.linalg.norm(v)
-        if norm > 0:
-            v = v / norm
-
-        v_batch = np.expand_dims(v, axis=0)
-
-        # IVF indexes need training before adding vectors
-        if isinstance(self.index, faiss.IndexIVFFlat) and not self.index.is_trained:
-            if len(self.records) >= self.nlist:
-                # Train on accumulated records when sufficient
-                pass
-            else:
-                pass
-
-        self.index.add(v_batch)
+        v = self._normalize(vector)
         self.records.append({
             "record_id": record_id,
             "source_url": source_url,
             "metadata": metadata or {}
         })
+        if self._is_ivf() and not self.index.is_trained:
+            self._pending.append(v)
+            self._train_and_flush()
+            return
+        self.index.add(np.expand_dims(v, axis=0))
+
+    def add_matrix(self, vectors: np.ndarray, records: List[Dict[str, Any]]) -> None:
+        """Replace index contents with a batch of rows. Used when reloading the canonical store."""
+        mat = self._normalize_matrix(vectors)
+        if len(records) != len(mat):
+            raise ValueError("FAISS record count does not match vector matrix")
+        self._build_empty_index()
+        self.records = [dict(r) for r in records]
+        self._pending = []
+        if len(mat) == 0:
+            return
+        if self._is_ivf() and not self.index.is_trained:
+            if len(mat) < self.index.nlist:
+                self._pending = [mat[i].copy() for i in range(len(mat))]
+                return
+            self.index.train(mat)
+        self.index.add(mat)
 
     def search(
         self,
@@ -94,13 +135,36 @@ class FaissVectorIndex:
         threshold: float = 0.60
     ) -> List[MatchResult]:
         """Searches nearest neighbors with cosine similarity >= threshold."""
-        if self.index.ntotal == 0 or len(self.records) == 0:
+        if len(self.records) == 0:
             return []
 
-        q = query_vector.astype(np.float32)
-        norm = np.linalg.norm(q)
-        if norm > 0:
-            q = q / norm
+        q = self._normalize(query_vector)
+
+        # IVF rows sit in memory until the training threshold is met.
+        if self._pending and self.index.ntotal == 0:
+            mat = np.vstack(self._pending)
+            sims = mat @ q
+            idxs = np.flatnonzero(sims >= threshold)
+            if idxs.size == 0:
+                return []
+            if idxs.size > top_k:
+                idxs = idxs[np.argpartition(sims[idxs], -top_k)[-top_k:]]
+            idxs = idxs[np.argsort(sims[idxs])[::-1]]
+            return [
+                MatchResult(
+                    record_id=self.records[int(i)]["record_id"],
+                    similarity=float(sims[i]),
+                    source_url=self.records[int(i)]["source_url"],
+                    metadata=self.records[int(i)]["metadata"],
+                )
+                for i in idxs
+            ]
+
+        if self.index.ntotal == 0:
+            return []
+
+        if self._is_ivf():
+            self.index.nprobe = min(8, self.index.nlist)
 
         q_batch = np.expand_dims(q, axis=0)
         k_search = min(top_k, self.index.ntotal)
@@ -123,15 +187,20 @@ class FaissVectorIndex:
 
     def save(self, filepath: str):
         """Saves FAISS index binary and JSON records."""
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        parent = os.path.dirname(os.path.abspath(filepath))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._train_and_flush()
         faiss.write_index(self.index, filepath)
         meta_path = filepath + ".records.json"
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump({
                 "embedding_dim": self.embedding_dim,
                 "index_type": self.index_type,
-                "records": self.records
-            }, f, indent=2)
+                "nlist": self.nlist,
+                "records": self.records,
+                "pending": [row.tolist() for row in self._pending],
+            }, f, separators=(",", ":"))
 
     @classmethod
     def load(cls, filepath: str) -> 'FaissVectorIndex':
@@ -148,8 +217,10 @@ class FaissVectorIndex:
 
         instance = cls(
             embedding_dim=meta.get("embedding_dim", 512),
-            index_type=meta.get("index_type", "Flat")
+            index_type=meta.get("index_type", "Flat"),
+            nlist=meta.get("nlist", 64),
         )
         instance.index = faiss.read_index(filepath)
         instance.records = meta.get("records", [])
+        instance._pending = [np.asarray(row, dtype=np.float32) for row in meta.get("pending", [])]
         return instance

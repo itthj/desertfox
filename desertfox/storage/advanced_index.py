@@ -40,9 +40,33 @@ class PartitionedVectorIndex:
         self.n_clusters = n_clusters
         self.records: List[Dict[str, Any]] = []
         self.vectors: Optional[np.ndarray] = None
+        self._buffer: Optional[np.ndarray] = None
+        self._count = 0
+        self._capacity = 0
         self.coarse_centroids: Optional[np.ndarray] = None
         self.cluster_buckets: Dict[int, List[int]] = {i: [] for i in range(n_clusters)}
         self.identity_clusters: Dict[str, BiometricCluster] = {}
+
+    def _append_row(self, vector: np.ndarray) -> None:
+        if self._buffer is None:
+            self._capacity = 64
+            self._buffer = np.empty((self._capacity, self.embedding_dim), dtype=np.float32)
+            self._count = 0
+        elif self._count >= self._capacity:
+            self._capacity *= 2
+            grown = np.empty((self._capacity, self.embedding_dim), dtype=np.float32)
+            grown[: self._count] = self._buffer[: self._count]
+            self._buffer = grown
+        self._buffer[self._count] = vector
+        self._count += 1
+        self.vectors = self._buffer[: self._count]
+
+    def _adopt_matrix(self, matrix: np.ndarray) -> None:
+        matrix = np.ascontiguousarray(matrix, dtype=np.float32)
+        self._buffer = matrix
+        self._count = int(matrix.shape[0]) if matrix.ndim == 2 else 0
+        self._capacity = self._count
+        self.vectors = self._buffer[: self._count] if self._count else None
 
     def add_record(
         self,
@@ -63,11 +87,7 @@ class PartitionedVectorIndex:
             "source_url": source_url,
             "metadata": metadata or {}
         })
-
-        if self.vectors is None:
-            self.vectors = np.expand_dims(vec, axis=0)
-        else:
-            self.vectors = np.vstack([self.vectors, vec])
+        self._append_row(vec)
 
         # Assign to nearest coarse cluster if centroids initialized
         if self.coarse_centroids is not None:
@@ -149,41 +169,40 @@ class PartitionedVectorIndex:
         if not candidate_indices:
             return []
 
-        sub_vectors = self.vectors[candidate_indices]
-        sims = np.dot(sub_vectors, q)
+        cand = np.asarray(candidate_indices, dtype=np.int64)
+        sims = self.vectors[cand] @ q
+        keep = np.flatnonzero(sims >= threshold)
+        if keep.size == 0:
+            return []
+        if keep.size > top_k:
+            part = np.argpartition(sims[keep], -top_k)[-top_k:]
+            keep = keep[part]
+        keep = keep[np.argsort(sims[keep])[::-1]]
+
+        chosen = cand[keep]
+        chosen_sims = sims[keep]
+        l2s = np.linalg.norm(self.vectors[chosen] - q, axis=1)
 
         results = []
-        for idx_in_sub, score in enumerate(sims):
-            if score >= threshold:
-                original_idx = candidate_indices[idx_in_sub]
-                rec = self.records[original_idx]
-                
-                # Compute Euclidean L2 distance for multi-metric confidence
-                l2_dist = float(np.linalg.norm(self.vectors[original_idx] - q))
-
-                # Geodesic Angular Distance on S^511
-                clipped_score = np.clip(float(score), -1.0, 1.0)
-                angle_rad = float(np.arccos(clipped_score))
-                normalized_angle = round(angle_rad / np.pi, 4)
-
-                # Calibrated probability via Platt Scaling (FAR calibrated)
-                z = 18.0 * (float(score) - 0.62)
-                calibrated_prob = round(float(1.0 / (1.0 + np.exp(-z))) * 100.0, 1)
-
-                results.append({
-                    "record_id": rec["record_id"],
-                    "similarity": round(float(score), 4),
-                    "similarity_percent": f"{float(score) * 100:.1f}%",
-                    "calibrated_confidence": f"{calibrated_prob}%",
-                    "l2_distance": round(l2_dist, 4),
-                    "angular_distance": normalized_angle,
-                    "confidence": "High" if score >= 0.78 else ("Moderate" if score >= 0.62 else "Low"),
-                    "source_url": rec["source_url"],
-                    "metadata": rec["metadata"]
-                })
-
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:top_k]
+        for original_idx, score, l2_dist in zip(chosen, chosen_sims, l2s):
+            rec = self.records[int(original_idx)]
+            score_f = float(score)
+            clipped_score = float(np.clip(score_f, -1.0, 1.0))
+            normalized_angle = round(float(np.arccos(clipped_score) / np.pi), 4)
+            z = 18.0 * (score_f - 0.62)
+            calibrated_prob = round(float(1.0 / (1.0 + np.exp(-z))) * 100.0, 1)
+            results.append({
+                "record_id": rec["record_id"],
+                "similarity": round(score_f, 4),
+                "similarity_percent": f"{score_f * 100:.1f}%",
+                "calibrated_confidence": f"{calibrated_prob}%",
+                "l2_distance": round(float(l2_dist), 4),
+                "angular_distance": normalized_angle,
+                "confidence": "High" if score_f >= 0.78 else ("Moderate" if score_f >= 0.62 else "Low"),
+                "source_url": rec["source_url"],
+                "metadata": rec["metadata"]
+            })
+        return results
 
     @staticmethod
     def chinese_whispers_cluster(vectors: np.ndarray, threshold: float = 0.68, max_iterations: int = 10) -> List[int]:
@@ -195,16 +214,17 @@ class PartitionedVectorIndex:
         if n == 0:
             return []
 
-        # Vector dot products compute cosine similarity matrix
-        sim_matrix = np.dot(vectors, vectors.T)
+        sim_matrix = vectors @ vectors.T
+        row_i, col_j = np.triu_indices(n, k=1)
+        weights = sim_matrix[row_i, col_j]
+        mask = weights >= threshold
         adj_list: Dict[int, List[Tuple[int, float]]] = {i: [] for i in range(n)}
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                w = float(sim_matrix[i, j])
-                if w >= threshold:
-                    adj_list[i].append((j, w))
-                    adj_list[j].append((i, w))
+        for i, j, w in zip(row_i[mask], col_j[mask], weights[mask]):
+            wi = float(w)
+            ii = int(i)
+            jj = int(j)
+            adj_list[ii].append((jj, wi))
+            adj_list[jj].append((ii, wi))
 
         labels = list(range(n))
         for _ in range(max_iterations):
@@ -236,21 +256,33 @@ class PartitionedVectorIndex:
         return canonical
 
     def save(self, filepath: str):
-        """Persists partitioned index to JSON."""
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        """Persists records as JSON and vectors as a float32 .npy sidecar."""
+        parent = os.path.dirname(os.path.abspath(filepath))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        npy_name = os.path.basename(filepath) + ".npy"
+        npy_path = filepath + ".npy"
+        if self.vectors is not None and len(self.vectors):
+            np.save(npy_path, np.ascontiguousarray(self.vectors, dtype=np.float32))
+        elif os.path.exists(npy_path):
+            os.remove(npy_path)
+            npy_name = ""
+        else:
+            npy_name = ""
         data = {
+            "format": "npy-v1",
             "dim": self.embedding_dim,
             "n_clusters": self.n_clusters,
             "records": self.records,
-            "vectors": self.vectors.tolist() if self.vectors is not None else [],
-            "coarse_centroids": self.coarse_centroids.tolist() if self.coarse_centroids is not None else []
+            "vectors_npy": npy_name,
+            "coarse_centroids": self.coarse_centroids.tolist() if self.coarse_centroids is not None else [],
         }
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, separators=(",", ":"))
 
     @classmethod
     def load(cls, filepath: str) -> "PartitionedVectorIndex":
-        """Loads partitioned index from JSON."""
+        """Loads partitioned index from compact npy-v1 or legacy JSON."""
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -259,9 +291,14 @@ class PartitionedVectorIndex:
             n_clusters=data.get("n_clusters", 8)
         )
         idx.records = data.get("records", [])
-        vec_list = data.get("vectors", [])
-        if vec_list:
-            idx.vectors = np.array(vec_list, dtype=np.float32)
+        npy_name = data.get("vectors_npy") or ""
+        if npy_name:
+            npy_path = os.path.join(os.path.dirname(os.path.abspath(filepath)), npy_name)
+            idx._adopt_matrix(np.load(npy_path))
+        else:
+            vec_list = data.get("vectors", [])
+            if vec_list:
+                idx._adopt_matrix(np.array(vec_list, dtype=np.float32))
 
         centroids = data.get("coarse_centroids", [])
         if centroids:

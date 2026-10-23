@@ -124,30 +124,11 @@ class DesertFoxEngine:
             except Exception as e:
                 logger.warning("Could not initialize FAISS index: %s", e)
 
-        # Initialize BK-Tree for perceptual near-duplicate filtering
         self.bktree = BKTree()
-        self.duplicate_hamming_threshold = 5
-
-        # Load or initialize vector store
+        self.duplicate_hamming_threshold = self.config.duplicate_hamming_threshold
+        self.vector_store = VectorStore(embedding_dim=self.embedder.embedding_dim)
         if os.path.exists(self.vector_store_path):
-            self.vector_store = VectorStore.load(self.vector_store_path)
-            # Synchronize to partitioned index
-            if self.vector_store.vectors is not None:
-                for idx, r in enumerate(self.vector_store.records):
-                    self.partitioned_index.add_record(
-                        record_id=r["record_id"],
-                        vector=self.vector_store.vectors[idx],
-                        source_url=r["source_url"],
-                        metadata=r["metadata"]
-                    )
-                    # Re-populate BK-Tree from stored fingerprints
-                    fingerprint = r.get("metadata", {}).get("fingerprint", {})
-                    dhash = fingerprint.get("dhash")
-                    if dhash:
-                        self.bktree.insert(dhash, {"record_id": r["record_id"]})
-                self.partitioned_index.build_partitions()
-        else:
-            self.vector_store = VectorStore(embedding_dim=self.embedder.embedding_dim)
+            self.load_index(self.vector_store_path)
 
     def process_and_index_image(
         self,
@@ -168,14 +149,21 @@ class DesertFoxEngine:
         if forensics.get("has_exif"):
             meta["forensics"] = forensics
 
-        # 2. Multi-Hash Fingerprint Cascade
+        # 2. Multi-Hash Fingerprint Cascade — reject near-duplicates before detection and embedding
         hashes = MultiPerceptualHasher.compute_cascade_fingerprint(image)
         meta["fingerprint"] = hashes
-
-        # Perceptual near-duplicate indexing via BK-Tree
         dhash = hashes.get("dhash")
         if dhash:
-            self.bktree.insert(dhash, {"record_id": record_id})
+            near = self.bktree.search(dhash, max_distance=self.duplicate_hamming_threshold)
+            if near:
+                best = min(near, key=lambda item: item[1])
+                return {
+                    "success": False,
+                    "reason": "Skipped near-duplicate image",
+                    "duplicate_of": best[2].get("record_id"),
+                    "hamming": best[1],
+                    "fingerprint": hashes["composite"],
+                }
 
         # 3. Face Detection & Alignment
         faces = self.detector.detect_faces(image)
@@ -208,7 +196,9 @@ class DesertFoxEngine:
                 "fiqa": fiqa
             }
 
-        # Add to vector stores
+        if dhash:
+            self.bktree.insert(dhash, {"record_id": record_id})
+
         self.vector_store.add(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
         self.partitioned_index.add_record(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
         if self.faiss_index is not None:
@@ -252,12 +242,7 @@ class DesertFoxEngine:
                 "matches": []
             }
 
-        # Query Partitioned Vector Store
-        matches = self.partitioned_index.search(
-            query_vector=probe_vector,
-            top_k=top_k,
-            threshold=threshold
-        )
+        matches = self._decorate_matches(self._query(probe_vector, top_k=top_k, threshold=threshold))
 
         return {
             "status": "success",
@@ -348,31 +333,87 @@ class DesertFoxEngine:
         image = Image.fromarray(probe_array.astype(np.uint8))
         aligned_crop = image.resize((112, 112))
         probe_vector = self.embedder.extract_from_pil(aligned_crop)
+        return self._query(probe_vector, top_k=top_k, threshold=threshold)
+
+    def _query(self, probe_vector: np.ndarray, top_k: int, threshold: float) -> List[MatchResult]:
+        """FAISS when it mirrors the canonical store. Otherwise an exact matrix scan."""
+        faiss_idx = self.faiss_index
+        n_records = len(self.vector_store.records)
+        if faiss_idx is not None and n_records and not faiss_idx._pending:
+            if faiss_idx.index.ntotal == n_records:
+                return faiss_idx.search(probe_vector, top_k=top_k, threshold=threshold)
         return self.vector_store.search(probe_vector, top_k=top_k, threshold=threshold)
 
+    @staticmethod
+    def _decorate_matches(matches: List[MatchResult]) -> List[Dict[str, Any]]:
+        """Attach the HUD fields (confidence, L2, angle) without a second pass over the matrix."""
+        decorated = []
+        for match in matches:
+            sim = float(match.similarity)
+            clipped = max(-1.0, min(1.0, sim))
+            l2 = float(np.sqrt(max(0.0, 2.0 - 2.0 * clipped)))
+            angle = float(np.arccos(clipped) / np.pi)
+            z = 18.0 * (sim - 0.62)
+            calibrated = round(float(1.0 / (1.0 + np.exp(-z))) * 100.0, 1)
+            decorated.append({
+                "record_id": match.record_id,
+                "similarity": round(sim, 4),
+                "similarity_percent": f"{sim * 100:.1f}%",
+                "calibrated_confidence": f"{calibrated}%",
+                "l2_distance": round(l2, 4),
+                "angular_distance": round(angle, 4),
+                "confidence": "High" if sim >= 0.78 else ("Moderate" if sim >= 0.62 else "Low"),
+                "source_url": match.source_url,
+                "metadata": match.metadata,
+            })
+        return decorated
+
+    def _rehydrate_indexes(self, target_path: str) -> None:
+        """Rebuild BK-tree, partitioned index, and FAISS from the canonical store."""
+        self.bktree = BKTree()
+        partitioned_path = target_path + ".partitioned"
+        if os.path.exists(partitioned_path):
+            self.partitioned_index = PartitionedVectorIndex.load(partitioned_path)
+        else:
+            self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
+            if self.vector_store.vectors is not None:
+                for idx, record in enumerate(self.vector_store.records):
+                    self.partitioned_index.add_record(
+                        record_id=record["record_id"],
+                        vector=self.vector_store.vectors[idx],
+                        source_url=record["source_url"],
+                        metadata=record["metadata"],
+                    )
+                self.partitioned_index.build_partitions()
+
+        for record in self.vector_store.records:
+            fingerprint = record.get("metadata", {}).get("fingerprint", {})
+            dhash = fingerprint.get("dhash")
+            if dhash:
+                self.bktree.insert(dhash, {"record_id": record["record_id"]})
+
+        if self.faiss_index is None:
+            return
+        faiss_path = target_path + ".faiss"
+        n_records = len(self.vector_store.records)
+        if os.path.exists(faiss_path) and os.path.exists(faiss_path + ".records.json"):
+            try:
+                loaded = FaissVectorIndex.load(faiss_path)
+                if loaded.index.ntotal + len(loaded._pending) == n_records:
+                    self.faiss_index = loaded
+                    return
+            except Exception as exc:
+                logger.warning("FAISS reload failed, rebuilding from store: %s", exc)
+        if n_records and self.vector_store.vectors is not None:
+            self.faiss_index.add_matrix(self.vector_store.vectors, self.vector_store.records)
+
     def load_index(self, path: Optional[str] = None):
-        """Loads vector store and partitioned index from disk."""
+        """Loads vector store and secondary indexes from disk."""
         target_path = path or self.vector_store_path
         self.vector_store_path = target_path
         if os.path.exists(target_path):
             self.vector_store = VectorStore.load(target_path)
-            self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
-            if self.vector_store.vectors is not None:
-                for idx, r in enumerate(self.vector_store.records):
-                    self.partitioned_index.add_record(
-                        record_id=r["record_id"],
-                        vector=self.vector_store.vectors[idx],
-                        source_url=r["source_url"],
-                        metadata=r["metadata"]
-                    )
-                    fingerprint = r.get("metadata", {}).get("fingerprint", {})
-                    dhash = fingerprint.get("dhash")
-                    if dhash:
-                        self.bktree.insert(dhash, {"record_id": r["record_id"]})
-                self.partitioned_index.build_partitions()
-        partitioned_path = target_path + ".partitioned"
-        if os.path.exists(partitioned_path):
-            self.partitioned_index = PartitionedVectorIndex.load(partitioned_path)
+            self._rehydrate_indexes(target_path)
 
     def save_index(self, path: Optional[str] = None):
         """Persists vector store, partitioned index, and optional FAISS index to disk."""

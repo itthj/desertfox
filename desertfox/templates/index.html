@@ -1,5 +1,418 @@
-                consoleBox.innerHTML += `\n[+] Host: ${data.host} | Pages: ${data.pages_discovered} | robots.txt ignored | all valid faces kept in scope`;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DesertFox Cyber-OSINT HUD</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #050816; color: #e5e7eb; }
+        .panel { background: rgba(15,23,42,0.88); border: 1px solid rgba(148,163,184,0.18); }
+        .muted { color: #94a3b8; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .glow { box-shadow: 0 0 0 1px rgba(34,211,238,0.15), 0 0 24px rgba(34,211,238,0.08); }
+    </style>
+</head>
+<body class="min-h-screen p-6">
+    <div class="max-w-7xl mx-auto space-y-6">
+        <header class="panel rounded-2xl p-6 glow">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                    <p class="text-xs uppercase tracking-[0.2em] text-cyan-400">DesertFox</p>
+                    <h1 class="text-3xl font-bold text-white">Cyber-OSINT HUD</h1>
+                </div>
+                <div class="flex gap-3 text-sm">
+                    <button id="tab-search" class="tab-btn px-4 py-2 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-200">Search</button>
+                    <button id="tab-crawl" class="tab-btn px-4 py-2 rounded-lg border border-slate-700 text-slate-300">Crawl</button>
+                    <button id="tab-legal" class="tab-btn px-4 py-2 rounded-lg border border-slate-700 text-slate-300">Legal</button>
+                    <button id="tab-optout" class="tab-btn px-4 py-2 rounded-lg border border-slate-700 text-slate-300">Opt-Out</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <section class="xl:col-span-2 panel rounded-2xl p-5 glow">
+                <div id="tab-panel-search" class="tab-panel">
+                    <h2 class="text-xl font-semibold mb-4">Reverse Search</h2>
+                    <div class="space-y-4">
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Probe Image</label>
+                                <input id="probe-image-input" type="file" accept="image/*" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Query</label>
+                                <input id="reverse-query-input" type="text" placeholder="name, alias, or public-facing identity" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                        </div>
+
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Seed URL</label>
+                                <input id="seed-url-input" type="text" placeholder="https://example.com" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Seed URLs (optional)</label>
+                                <textarea id="seed-urls-input" rows="3" placeholder="https://site-a.com\nhttps://site-b.com" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm"></textarea>
+                            </div>
+                        </div>
+
+                        <div class="grid md:grid-cols-4 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Max sites</label>
+                                <input id="reverse-max-sites" type="number" value="10" min="1" max="50" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Max pages</label>
+                                <input id="reverse-max-pages" type="number" value="30" min="1" max="200" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Max images</label>
+                                <input id="reverse-max-images" type="number" value="10" min="1" max="50" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Top K</label>
+                                <input id="reverse-top-k" type="number" value="10" min="1" max="50" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-4">
+                            <button id="reverse-search-btn" class="rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold px-5 py-2">Run reverse search</button>
+                            <span id="reverse-status" class="text-sm text-slate-400">Idle</span>
+                        </div>
+                    </div>
+
+                    <div class="mt-6">
+                        <h3 class="text-lg font-semibold mb-3">Ranked matches</h3>
+                        <div id="reverse-results" class="space-y-4"></div>
+                    </div>
+                </div>
+
+                <div id="tab-panel-crawl" class="tab-panel hidden">
+                    <h2 class="text-xl font-semibold mb-4">Audit / Crawl</h2>
+                    <div class="space-y-4">
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Target URL</label>
+                                <input id="crawl-url-input" type="text" placeholder="https://example.com" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-sm text-slate-300">Site search query</label>
+                                <input id="crawl-query-input" type="text" placeholder="optional identity or site query" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                        </div>
+                        <div class="grid md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="text-sm text-slate-300">Max pages</label>
+                                <input id="crawl-pages" type="number" value="30" min="1" max="200" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div>
+                                <label class="text-sm text-slate-300">Max images/page</label>
+                                <input id="crawl-limit" type="number" value="10" min="1" max="50" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div>
+                                <label class="text-sm text-slate-300">Max sites</label>
+                                <input id="crawl-sites" type="number" value="10" min="1" max="50" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button id="crawl-btn" class="rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold px-5 py-2">Run audit</button>
+                            <span id="crawl-status" class="text-sm text-slate-400">Idle</span>
+                        </div>
+                        <div id="crawl-console" class="mt-4 rounded-xl border border-slate-700 bg-slate-950/80 p-3 mono text-xs text-slate-300 min-h-[180px] whitespace-pre-wrap"></div>
+                    </div>
+                </div>
+
+                <div id="tab-panel-legal" class="tab-panel hidden">
+                    <h2 class="text-xl font-semibold mb-4">Legal Notice Generator</h2>
+                    <div class="space-y-4">
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-sm text-slate-300">Subject / Owner</label>
+                                <input id="legal-name" type="text" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                            <div>
+                                <label class="text-sm text-slate-300">Contact Email</label>
+                                <input id="legal-email" type="email" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-sm text-slate-300">Infringing URL</label>
+                            <input id="legal-url" type="text" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                        </div>
+                        <div>
+                            <label class="text-sm text-slate-300">Notes</label>
+                            <textarea id="legal-notes" rows="4" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm"></textarea>
+                        </div>
+                        <button id="generate-legal-btn" class="rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold px-5 py-2">Generate notice</button>
+                        <textarea id="legal-output" rows="12" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-sm"></textarea>
+                    </div>
+                </div>
+
+                <div id="tab-panel-optout" class="tab-panel hidden">
+                    <h2 class="text-xl font-semibold mb-4">Zero-Knowledge Opt-Out</h2>
+                    <div class="space-y-4">
+                        <input id="optout-file-input" type="file" accept="image/*" class="w-full rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-sm" />
+                        <div id="optout-drop-zone" class="rounded-xl border border-dashed border-cyan-500/50 bg-slate-950/60 p-6 text-center text-slate-300">Drop a photo here or click to select</div>
+                        <button id="optout-btn" class="rounded-xl bg-fuchsia-500 hover:bg-fuchsia-400 text-white font-semibold px-5 py-2">Register opt-out</button>
+                        <div id="optout-status" class="text-sm text-slate-300"></div>
+                    </div>
+                </div>
+            </section>
+
+            <aside class="space-y-6">
+                <div class="panel rounded-2xl p-5 glow">
+                    <h3 class="text-lg font-semibold mb-3">Engine stats</h3>
+                    <div id="stats-box" class="space-y-2 text-sm text-slate-300"></div>
+                </div>
+                <div class="panel rounded-2xl p-5 glow">
+                    <h3 class="text-lg font-semibold mb-3">Quick actions</h3>
+                    <div class="space-y-2">
+                        <button id="load-stats-btn" class="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm">Refresh stats</button>
+                        <button id="demo-data-btn" class="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm">Inject demo data</button>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script>
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        const tabPanels = document.querySelectorAll('.tab-panel');
+
+        function switchTab(tab) {
+            tabButtons.forEach((btn) => {
+                const active = btn.id === `tab-${tab}`;
+                btn.className = active
+                    ? 'tab-btn px-4 py-2 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-200'
+                    : 'tab-btn px-4 py-2 rounded-lg border border-slate-700 text-slate-300';
+            });
+            tabPanels.forEach((panel) => {
+                panel.classList.toggle('hidden', !panel.id.endsWith(tab));
+            });
+        }
+
+        function setStatus(nodeId, text, tone='muted') {
+            const node = document.getElementById(nodeId);
+            if (!node) return;
+            node.innerText = text;
+            node.className = `text-sm ${tone === 'ok' ? 'text-emerald-400' : tone === 'warn' ? 'text-amber-400' : tone === 'err' ? 'text-rose-400' : 'text-slate-400'}`;
+        }
+
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                const box = document.getElementById('stats-box');
+                box.innerHTML = `
+                    <div>Vectors: <span class="text-cyan-300">${data.total_indexed_vectors || 0}</span></div>
+                    <div>Embedding dim: <span class="text-cyan-300">${data.embedding_dimensions || 0}</span></div>
+                    <div>Opt-outs: <span class="text-cyan-300">${data.optout_exclusions_count || 0}</span></div>
+                    <div>Enrollment: <span class="text-cyan-300">${data.enrollment_mode || 'none'}</span></div>
+                    <div>Path: <span class="text-cyan-300 mono text-[10px]">${data.vector_store_path || 'n/a'}</span></div>
+                `;
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function readFileAsDataUrl(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => resolve(ev.target.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function executeReverseSearch() {
+            const fileInput = document.getElementById('probe-image-input');
+            const queryInput = document.getElementById('reverse-query-input');
+            const seedUrlInput = document.getElementById('seed-url-input');
+            const seedUrlsInput = document.getElementById('seed-urls-input');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a probe image first.');
+                return;
+            }
+
+            const dataUrl = await readFileAsDataUrl(file);
+            const payload = {
+                image_base64: dataUrl,
+                search_query: queryInput.value.trim() || undefined,
+                seed_url: seedUrlInput.value.trim() || undefined,
+                seed_urls: (seedUrlsInput.value || '').split(/\n|,/) .map((s) => s.trim()).filter(Boolean),
+                max_pages: Number(document.getElementById('reverse-max-pages').value || 30),
+                max_images: Number(document.getElementById('reverse-max-images').value || 10),
+                max_sites: Number(document.getElementById('reverse-max-sites').value || 10),
+                top_k: Number(document.getElementById('reverse-top-k').value || 10),
+                threshold: 0.60,
+            };
+
+            setStatus('reverse-status', 'Searching...', 'warn');
+            const resultsBox = document.getElementById('reverse-results');
+            resultsBox.innerHTML = '<div class="text-slate-400">Searching across candidate hosts...</div>';
+
+            try {
+                const response = await fetch('/api/search/reverse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Reverse search failed');
+                }
+
+                const matches = data.matches || [];
+                setStatus('reverse-status', `Done — ${matches.length} matches`, 'ok');
+                if (!matches.length) {
+                    resultsBox.innerHTML = '<div class="text-slate-400">No matches above threshold were found.</div>';
+                    return;
+                }
+
+                resultsBox.innerHTML = matches.map((match, idx) => `
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm text-cyan-300">Match #${idx + 1}</div>
+                                <div class="text-xl font-semibold text-white">${match.similarity_percent || '0%'}</div>
+                            </div>
+                            <span class="px-2 py-1 rounded-full text-xs border ${match.confidence === 'High' ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300' : match.confidence === 'Moderate' ? 'border-amber-500/50 bg-amber-500/10 text-amber-300' : 'border-slate-600 bg-slate-800 text-slate-300'}">${match.confidence || 'Low'}</span>
+                        </div>
+                        <div class="mt-3 text-xs text-slate-400 mono break-all">${match.source_url || 'unknown-source'}</div>
+                        <div class="mt-3 text-xs text-slate-300">Calibrated confidence: ${match.calibrated_confidence || '0%'}</div>
+                        <div class="mt-2 text-xs text-slate-400">Record ID: ${match.record_id || 'n/a'}</div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                setStatus('reverse-status', error.message, 'err');
+                resultsBox.innerHTML = `<div class="text-rose-400">${error.message}</div>`;
+            }
+        }
+
+        async function executeCrawl() {
+            const url = document.getElementById('crawl-url-input').value.trim();
+            const query = document.getElementById('crawl-query-input').value.trim();
+            if (!url) {
+                alert('Enter a site or seed URL to audit.');
+                return;
+            }
+            const limit = parseInt(document.getElementById('crawl-limit').value);
+            const maxPages = parseInt(document.getElementById('crawl-pages').value);
+            const maxSites = parseInt(document.getElementById('crawl-sites').value);
+            const consoleBox = document.getElementById('crawl-console');
+            const statusBox = document.getElementById('crawl-status');
+
+            statusBox.innerText = 'AUDITING...';
+            statusBox.className = 'text-sm text-amber-400';
+            consoleBox.innerHTML = `[*] Walking seed ${url} (page cap ${maxPages}, site cap ${maxSites})...`;
+
+            try {
+                const payload = {
+                    seed_url: url,
+                    search_query: query || undefined,
+                    max_pages: maxPages,
+                    max_images: limit,
+                    max_sites: maxSites,
+                };
+                const res = await fetch('/api/index/audit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (!res.ok || data.status === 'error') {
+                    throw new Error(data.detail || data.message || 'Audit failed');
+                }
+                consoleBox.innerHTML += `\n[+] Discovered ${data.pages_discovered || 0} pages across ${data.seed_urls?.length || 0} sites. robots.txt skips: ${data.pages_skipped_robots || 0}`;
                 (data.pages || []).forEach((page) => {
                     consoleBox.innerHTML += `\n    ${page.url} -> ${page.indexed} indexed`;
                 });
-                consoleBox.innerHTML += `\n[✓] Indexed ${data.newly_indexed_images || 0} images from this host.`;
+                consoleBox.innerHTML += `\n[✓] Indexed ${data.newly_indexed_images || 0} images.`;
+                statusBox.innerText = 'DONE';
+                statusBox.className = 'text-sm text-emerald-400';
+                fetchStats();
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Error: ${e.message}`;
+                statusBox.innerText = 'ERROR';
+                statusBox.className = 'text-sm text-rose-400';
+            }
+        }
+
+        async function generateLegalNotice() {
+            const payload = {
+                notice_type: 'gdpr',
+                infringing_url: document.getElementById('legal-url').value.trim(),
+                subject_name: document.getElementById('legal-name').value.trim(),
+                subject_email: document.getElementById('legal-email').value.trim(),
+                notes: document.getElementById('legal-notes').value.trim(),
+            };
+            const outputBox = document.getElementById('legal-output');
+            try {
+                const res = await fetch('/api/takedown', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Notice generation failed');
+                outputBox.value = data.notice;
+            } catch (e) {
+                outputBox.value = `Error: ${e.message}`;
+            }
+        }
+
+        async function registerOptOut() {
+            const fileInput = document.getElementById('optout-file-input');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Select an image for the opt-out registry.');
+                return;
+            }
+            const dataUrl = await readFileAsDataUrl(file);
+            const res = await fetch('/api/opt-out', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_base64: dataUrl }),
+            });
+            const data = await res.json();
+            const statusBox = document.getElementById('optout-status');
+            if (!res.ok) {
+                statusBox.textContent = data.detail || 'Opt-out failed';
+                statusBox.className = 'text-sm text-rose-400';
+                return;
+            }
+            statusBox.textContent = data.message || 'Opt-out registered.';
+            statusBox.className = 'text-sm text-emerald-400';
+        }
+
+        document.getElementById('reverse-search-btn').addEventListener('click', executeReverseSearch);
+        document.getElementById('crawl-btn').addEventListener('click', executeCrawl);
+        document.getElementById('generate-legal-btn').addEventListener('click', generateLegalNotice);
+        document.getElementById('optout-btn').addEventListener('click', registerOptOut);
+        document.getElementById('load-stats-btn').addEventListener('click', fetchStats);
+        document.getElementById('demo-data-btn').addEventListener('click', () => {
+            document.getElementById('reverse-query-input').value = 'public figure';
+            document.getElementById('seed-url-input').value = 'https://example.com';
+            window.alert('Demo data inserted.');
+        });
+
+        const optoutDrop = document.getElementById('optout-drop-zone');
+        const optoutFile = document.getElementById('optout-file-input');
+        optoutDrop.addEventListener('click', () => optoutFile.click());
+        optoutFile.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                optoutDrop.innerHTML = `<span class="text-emerald-400 font-mono text-xs">✓ Photo selected for opt-out registration</span>`;
+            }
+        });
+
+        tabButtons.forEach((button) => {
+            button.addEventListener('click', () => switchTab(button.id.replace('tab-', '')));
+        });
+
+        switchTab('search');
+        fetchStats();
+    </script>
+</body>
+</html>

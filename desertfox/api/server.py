@@ -43,6 +43,11 @@ class CrawlRequest(BaseModel):
     target_url: str = Field(..., description="URL to scrape and ingest")
     max_images: int = Field(10, ge=1, le=50)
 
+class AuditRequest(BaseModel):
+    seed_url: str = Field(..., min_length=3, max_length=500, description="One site to walk. Other hosts are not followed.")
+    max_pages: int = Field(30, ge=1, le=100)
+    max_images: int = Field(10, ge=1, le=25)
+
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
 
@@ -107,6 +112,15 @@ def index_single_image(req: IndexImageRequest):
             return {"status": "skipped", "reason": res.get("reason", "Excluded or low quality")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Indexing failed: {str(e)}")
+
+
+@app.post("/api/index/audit")
+def audit_site(req: AuditRequest):
+    """Walks one named host via its sitemap and on-site links, then indexes images."""
+    try:
+        return engine.audit_site(req.seed_url, max_pages=req.max_pages, max_images=req.max_images)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Site audit failed: {str(e)}")
 
 
 @app.post("/api/index/crawl")

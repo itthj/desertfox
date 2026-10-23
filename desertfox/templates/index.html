@@ -237,17 +237,25 @@
         <section id="tab-crawler" class="hidden space-y-6">
             <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
                 <div class="border-b border-slate-800 pb-3">
-                    <h2 class="text-sm font-semibold mono text-emerald-400">[WEB_HARVESTER_AND_INGESTION]</h2>
-                    <p class="text-xs text-slate-400">Asynchronously scrape public domains, extract profile photos, compute perceptual hashes, and index 512-d embeddings.</p>
+                    <h2 class="text-sm font-semibold mono text-emerald-400">[SITE_AUDIT_AND_INGESTION]</h2>
+                    <p class="text-xs text-slate-400">Name one site. DesertFox reads its sitemap and follows links on that host only, skips paths blocked by robots.txt, then indexes images from the pages it finds.</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div class="md:col-span-2 space-y-2">
-                        <label class="text-xs mono text-slate-400">TARGET PAGE OR PROFILE URL</label>
-                        <input type="url" id="crawl-url-input" placeholder="https://example.com/team-directory or public forum page" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                    <div class="md:col-span-1 space-y-2">
+                        <label class="text-xs mono text-slate-400">SITE TO AUDIT</label>
+                        <input type="text" id="crawl-url-input" placeholder="example.com or https://example.com/team" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
                     </div>
                     <div class="space-y-2">
-                        <label class="text-xs mono text-slate-400">MAX IMAGES TO EXTRACT</label>
+                        <label class="text-xs mono text-slate-400">MAX PAGES ON THIS HOST</label>
+                        <select id="crawl-pages" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                            <option value="10">10 Pages</option>
+                            <option value="30" selected>30 Pages</option>
+                            <option value="60">60 Pages</option>
+                        </select>
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs mono text-slate-400">MAX IMAGES PER PAGE</label>
                         <select id="crawl-limit" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
                             <option value="5">5 Images</option>
                             <option value="10" selected>10 Images</option>
@@ -258,7 +266,7 @@
 
                 <div class="flex items-center space-x-3">
                     <button onclick="executeCrawl()" id="btn-crawl" class="px-6 py-2.5 rounded-lg text-xs mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition-all flex items-center space-x-2">
-                        <span>⚡</span><span>START HARVEST & INDEXING</span>
+                        <span>⚡</span><span>AUDIT THIS SITE</span>
                     </button>
                     <button onclick="injectDemoData()" class="px-4 py-2.5 rounded-lg text-xs mono font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
                         <span>🧪 Inject Sample Identities (Test)</span>
@@ -272,7 +280,7 @@
                         <span id="crawl-status" class="text-emerald-400">IDLE</span>
                     </div>
                     <div id="crawl-console" class="bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 h-48 overflow-y-auto space-y-1">
-                        <div class="text-slate-400">[*] Harvester daemon standby. Waiting for target URL or demo injection...</div>
+                        <div class="text-slate-400">[*] Site audit standby. Enter one host. Links to other sites are ignored.</div>
                     </div>
                 </div>
             </div>
@@ -716,35 +724,40 @@
 
         // Crawler & Harvester
         async function executeCrawl() {
-            const url = document.getElementById('crawl-url-input').value;
+            const url = document.getElementById('crawl-url-input').value.trim();
             if (!url) {
-                alert("Please enter a target URL to crawl.");
+                alert("Enter the site to audit.");
                 return;
             }
             const limit = parseInt(document.getElementById('crawl-limit').value);
+            const maxPages = parseInt(document.getElementById('crawl-pages').value);
             const consoleBox = document.getElementById('crawl-console');
             const statusBox = document.getElementById('crawl-status');
 
-            statusBox.innerText = "CRAWLING...";
+            statusBox.innerText = "AUDITING...";
             statusBox.className = "text-amber-400 animate-pulse";
-            consoleBox.innerHTML += `\n[*] Initiating extraction on: ${url}...`;
+            consoleBox.innerHTML += `\n[*] Walking host from ${url} (page cap ${maxPages})...`;
 
             try {
-                const res = await fetch('/api/index/crawl', {
+                const res = await fetch('/api/index/audit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target_url: url, max_images: limit })
+                    body: JSON.stringify({ seed_url: url, max_pages: maxPages, max_images: limit })
                 });
                 const data = await res.json();
-                const osint = data.page_osint || {};
-                consoleBox.innerHTML += `\n[+] Domain: ${osint.domain || url} | Host IP: ${osint.host_ip || 'N/A'}`;
-                if (osint.page_title) consoleBox.innerHTML += `\n[+] Page Title: "${osint.page_title}"`;
-                consoleBox.innerHTML += `\n[✓] Extracted ${data.candidates_found || 0} candidates. Indexed ${data.newly_indexed_images || 0} unique biometric portraits.`;
+                if (!res.ok || data.status === "error") {
+                    throw new Error(data.detail || data.message || "Audit failed");
+                }
+                consoleBox.innerHTML += `\n[+] Host: ${data.host} | Pages: ${data.pages_discovered} | robots.txt skips: ${data.pages_skipped_robots}`;
+                (data.pages || []).forEach((page) => {
+                    consoleBox.innerHTML += `\n    ${page.url} -> ${page.indexed} indexed`;
+                });
+                consoleBox.innerHTML += `\n[✓] Indexed ${data.newly_indexed_images || 0} images from this host.`;
                 statusBox.innerText = "DONE";
                 statusBox.className = "text-emerald-400";
                 fetchStats();
             } catch (e) {
-                consoleBox.innerHTML += `\n[!] Error during crawl: ${e.message}`;
+                consoleBox.innerHTML += `\n[!] Error during audit: ${e.message}`;
                 statusBox.innerText = "ERROR";
                 statusBox.className = "text-rose-400";
             }

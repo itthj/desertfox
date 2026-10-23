@@ -39,9 +39,11 @@ class EngineConfig(BaseModel):
     # Deduplication
     duplicate_hamming_threshold: int = Field(default=5, description="BK-Tree Hamming distance threshold for near-duplicates")
 
-    # Crawling
-    max_harvest_images: int = Field(default=15, description="Max images to harvest per crawl target")
+    # Crawling. Discovery stays on hosts the operator names.
+    max_harvest_images: int = Field(default=15, description="Max images to harvest per page")
     rate_limit_ms: int = Field(default=250, description="Minimum delay between HTTP requests (ms)")
+    audit_max_pages: int = Field(default=30, description="Default page cap for a same-host site audit")
+    audit_max_depth: int = Field(default=2, description="Link depth from the seed page during a site audit")
 
 
 # Singleton default config

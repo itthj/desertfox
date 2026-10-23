@@ -34,6 +34,13 @@ def main():
     td_parser.add_argument("--email", type=str, required=True, help="Subject's contact email")
     td_parser.add_argument("--type", choices=["gdpr", "dmca", "ccpa"], default="gdpr", help="Type of legal notice")
 
+    # Subcommand: audit
+    audit_parser = subparsers.add_parser("audit", help="Walk one site you name (sitemap + on-site links) and index its images")
+    audit_parser.add_argument("--url", type=str, required=True, help="Seed URL or domain. Other hosts are not followed.")
+    audit_parser.add_argument("--max-pages", type=int, default=30, help="Page cap for this host (1-100)")
+    audit_parser.add_argument("--max-images", type=int, default=10, help="Max images to index per page (1-25)")
+    audit_parser.add_argument("--store", type=str, default="./data/desertfox.index", help="Vector store path")
+
     # Subcommand: serve
     serve_parser = subparsers.add_parser("serve", help="Launch the DesertFox Cyber-OSINT HUD Web Application")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface to bind to")
@@ -104,6 +111,19 @@ def main():
         print("=" * 60)
         print(notice)
         print("=" * 60)
+
+    elif args.command == "audit":
+        from desertfox.config import EngineConfig
+        engine = DesertFoxEngine(config=EngineConfig(vector_store_path=args.store))
+        print(f"[*] Auditing host from {args.url} (max_pages={args.max_pages})")
+        result = engine.audit_site(args.url, max_pages=args.max_pages, max_images=args.max_images)
+        if result.get("status") != "success":
+            print(f"[!] {result.get('message', 'Audit failed')}")
+            sys.exit(1)
+        print(f"[✓] Host {result['host']}: {result['pages_discovered']} pages, {result['pages_skipped_robots']} blocked by robots.txt")
+        print(f"[✓] Indexed {result['newly_indexed_images']} images into {args.store}")
+        for page in result["pages"]:
+            print(f"    - {page['url']} -> {page['indexed']} indexed")
 
     elif args.command == "serve":
         import uvicorn

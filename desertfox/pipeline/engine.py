@@ -28,6 +28,7 @@ from desertfox.privacy.optout import ZeroKnowledgeOptOutRegistry
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
+from desertfox.ingestion.site_crawler import SiteCrawler
 from desertfox.config import EngineConfig
 
 try:
@@ -256,8 +257,8 @@ class DesertFoxEngine:
             "matches": matches
         }
 
-    def crawl_and_index_target(self, target_url: str, max_images: int = 15, use_async: bool = True) -> Dict[str, Any]:
-        """Runs media harvester across target webpage and indexes images."""
+    def crawl_and_index_target(self, target_url: str, max_images: int = 15, use_async: bool = True, persist: bool = True) -> Dict[str, Any]:
+        """Runs media harvester across one webpage and indexes images."""
         if use_async:
             harvest_result = self.async_harvester.crawl_target(target_url, max_harvest=max_images)
         else:
@@ -288,7 +289,7 @@ class DesertFoxEngine:
             if res.get("success"):
                 indexed_count += 1
 
-        if indexed_count > 0:
+        if indexed_count > 0 and persist:
             self.partitioned_index.build_partitions()
             self.save_index()
 
@@ -298,6 +299,62 @@ class DesertFoxEngine:
             "page_osint": page_osint,
             "candidates_found": harvest_result.get("candidates_discovered", 0),
             "newly_indexed_images": indexed_count
+        }
+
+    def audit_site(self, seed_url: str, max_pages: Optional[int] = None, max_images: int = 10) -> Dict[str, Any]:
+        """
+        Walk pages on one host the operator named, then index images from those pages.
+        Stays on that host, obeys robots.txt, and stops at the page cap.
+        """
+        page_cap = max_pages if max_pages is not None else self.config.audit_max_pages
+        page_cap = max(1, min(int(page_cap), 100))
+        image_cap = max(1, min(int(max_images), 25))
+        crawler = SiteCrawler(
+            user_agent=self.harvester.headers["User-Agent"],
+            delay_s=max(self.config.rate_limit_ms, 0) / 1000.0,
+        )
+        discovered = crawler.discover(
+            seed_url,
+            max_pages=page_cap,
+            max_depth=self.config.audit_max_depth,
+        )
+        if discovered.get("error"):
+            return {"status": "error", "message": discovered["error"], "newly_indexed_images": 0, "pages": []}
+
+        reports = []
+        total_indexed = 0
+        for page in discovered["pages"]:
+            try:
+                result = self.crawl_and_index_target(
+                    page,
+                    max_images=image_cap,
+                    use_async=False,
+                    persist=False,
+                )
+            except Exception as exc:
+                reports.append({"url": page, "status": "error", "indexed": 0, "error": str(exc)})
+                continue
+            indexed = int(result.get("newly_indexed_images", 0))
+            total_indexed += indexed
+            reports.append({
+                "url": page,
+                "status": result.get("status", "error"),
+                "indexed": indexed,
+                "candidates": result.get("candidates_found", 0),
+            })
+
+        if total_indexed > 0:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        return {
+            "status": "success",
+            "seed_url": discovered.get("seed_url", seed_url),
+            "host": discovered.get("host", ""),
+            "pages_discovered": len(discovered["pages"]),
+            "pages_skipped_robots": discovered.get("skipped_robots", 0),
+            "newly_indexed_images": total_indexed,
+            "pages": reports,
         }
 
     def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:

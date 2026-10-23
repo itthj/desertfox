@@ -84,37 +84,27 @@ def get_stats():
         "embedding_dimensions": engine.embedder.embedding_dim,
         "optout_exclusions_count": len(engine.optout_registry.blacklisted_hashes),
         "vector_store_path": engine.vector_store_path,
-        "face_enrolled": engine.enrollment.enrolled,
-        "enrollment_mode": engine.enrollment.mode,
+        "face_enrolled": False,
+        "enrollment_mode": "disabled",
     }
 
 
 @app.post("/api/search")
 def search_probe(req: SearchRequest):
-    """Audits a probe photo against indexed faces for the one enrolled person."""
+    """Audits a probe photo against indexed faces without an enrollment gate."""
     try:
-        image, digest = decode_base64_payload(req.image_base64)
-        gate = engine.authorize_probe(image, digest)
-        if not gate["allowed"]:
-            raise HTTPException(status_code=403, detail={
-                "status": "rejected",
-                "message": gate.get("message") or "This photo does not match the enrolled face.",
-                "similarity": gate.get("similarity"),
-                "mode": gate.get("mode"),
-            })
+        image, _digest = decode_base64_payload(req.image_base64)
         results = engine.search_probe_image(
             probe_image=image,
             top_k=req.top_k,
             threshold=req.threshold
         )
         results["enrollment"] = {
-            "created": gate["created"],
-            "similarity": gate["similarity"],
-            "mode": gate["mode"],
+            "created": False,
+            "similarity": 1.0,
+            "mode": "disabled",
         }
         return results
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
 

@@ -10,6 +10,7 @@ Tests:
 """
 
 import unittest
+import os
 import numpy as np
 from PIL import Image
 
@@ -175,6 +176,45 @@ class TestDesertFoxV2(unittest.TestCase):
         gdpr = TakedownNoticeGenerator.generate_gdpr_erasure_request("Jane Doe", "jane@example.com", "https://leak.example/img.jpg")
         self.assertIn("GDPR Article 17", gdpr)
         self.assertIn("https://leak.example/img.jpg", gdpr)
+
+    def test_engine_pipeline_and_cli_methods(self):
+        """Verify DesertFoxEngine end-to-end indexing, search array, and persistence."""
+        import tempfile
+        from desertfox.pipeline.engine import DesertFoxEngine
+        from desertfox.config import EngineConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "test.index")
+            cfg = EngineConfig(vector_store_path=store_path)
+            engine = DesertFoxEngine(config=cfg)
+
+            # Test indexing array
+            sample_img = np.random.randint(0, 256, (112, 112, 3), dtype=np.uint8)
+            res = engine.index_image_array(
+                sample_img,
+                record_id="target_001",
+                source_url="https://example.com/target_001.jpg",
+                metadata={"test": True}
+            )
+            self.assertTrue(res["success"])
+
+            # Test searching probe array
+            matches = engine.search_probe_array(sample_img, top_k=5, threshold=0.5)
+            self.assertGreaterEqual(len(matches), 1)
+            self.assertEqual(matches[0].record_id, "target_001")
+
+            # Test save and load index
+            engine.save_index(store_path)
+            self.assertTrue(os.path.exists(store_path))
+
+            engine2 = DesertFoxEngine()
+            engine2.load_index(store_path)
+            self.assertEqual(len(engine2.vector_store.records), 1)
+
+            # Test BK-Tree perceptual duplicate query
+            img = Image.fromarray(sample_img)
+            dups = engine2.find_perceptual_duplicates(img, max_distance=5)
+            self.assertGreaterEqual(len(dups), 1)
 
 if __name__ == "__main__":
     unittest.main()

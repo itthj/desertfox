@@ -7,10 +7,11 @@ Coordinates:
 4. Advanced Voronoi space-partitioned vector indexing
 5. Forensic OSINT & EXIF metadata extraction
 6. Zero-Knowledge Opt-Out (ZKO) cryptographic filtering
+7. BK-Tree perceptual near-duplicate filtering
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from PIL import Image
 
@@ -18,33 +19,41 @@ from desertfox.core.embedder import BaseEmbedder, VisualFeatureEmbedder
 from desertfox.core.detector import BaseDetector, AdaptiveFaceDetector
 from desertfox.core.fiqa import FaceQualityAssessment
 from desertfox.core.hashing import MultiPerceptualHasher
+from desertfox.core.bktree import BKTree
 from desertfox.storage.advanced_index import PartitionedVectorIndex
-from desertfox.storage.vector_store import VectorStore
+from desertfox.storage.vector_store import VectorStore, MatchResult
 from desertfox.privacy.optout import ZeroKnowledgeOptOutRegistry
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
+from desertfox.config import EngineConfig
 
 class DesertFoxEngine:
     def __init__(
         self,
-        vector_store_path: str = "./data/desertfox.index",
+        vector_store_path: str = None,
         optout_registry_path: str = "./data/optout_registry.json",
         embedder: Optional[BaseEmbedder] = None,
-        detector: Optional[BaseDetector] = None
+        detector: Optional[BaseDetector] = None,
+        config: Optional[EngineConfig] = None
     ):
-        self.vector_store_path = vector_store_path
-        self.embedder = embedder or VisualFeatureEmbedder(embedding_dim=512)
+        # Apply configuration (use provided config or defaults)
+        self.config = config or EngineConfig()
+        self.vector_store_path = vector_store_path or self.config.vector_store_path
+        self.similarity_threshold = self.config.similarity_threshold
+        self.embedder = embedder or VisualFeatureEmbedder(embedding_dim=self.config.embedding_dimension)
         self.detector = detector or AdaptiveFaceDetector()
         self.optout_registry = ZeroKnowledgeOptOutRegistry(registry_file=optout_registry_path)
         self.harvester = AdvancedHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
 
+        # Initialize BK-Tree for perceptual near-duplicate filtering
+        self.bktree = BKTree()
+        self.duplicate_hamming_threshold = 5
+
         # Load or initialize vector store
-        if os.path.exists(vector_store_path):
-            self.vector_store = VectorStore.load(vector_store_path)
+        if os.path.exists(self.vector_store_path):
+            self.vector_store = VectorStore.load(self.vector_store_path)
             # Synchronize to partitioned index
-            for rec in self.vector_store.records:
-                pass
             if self.vector_store.vectors is not None:
                 for idx, r in enumerate(self.vector_store.records):
                     self.partitioned_index.add_record(
@@ -53,6 +62,11 @@ class DesertFoxEngine:
                         source_url=r["source_url"],
                         metadata=r["metadata"]
                     )
+                    # Re-populate BK-Tree from stored fingerprints
+                    fingerprint = r.get("metadata", {}).get("fingerprint", {})
+                    dhash = fingerprint.get("dhash")
+                    if dhash:
+                        self.bktree.insert(dhash, {"record_id": r["record_id"]})
                 self.partitioned_index.build_partitions()
         else:
             self.vector_store = VectorStore(embedding_dim=self.embedder.embedding_dim)
@@ -79,6 +93,11 @@ class DesertFoxEngine:
         # 2. Multi-Hash Fingerprint Cascade
         hashes = MultiPerceptualHasher.compute_cascade_fingerprint(image)
         meta["fingerprint"] = hashes
+
+        # Perceptual near-duplicate indexing via BK-Tree
+        dhash = hashes.get("dhash")
+        if dhash:
+            self.bktree.insert(dhash, {"record_id": record_id})
 
         # 3. Face Detection & Alignment
         faces = self.detector.detect_faces(image)
@@ -213,6 +232,67 @@ class DesertFoxEngine:
             "newly_indexed_images": indexed_count
         }
 
-    def save_index(self):
-        self.vector_store.save(self.vector_store_path)
-        self.partitioned_index.save(self.vector_store_path + ".partitioned")
+    def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:
+        """Finds near-duplicate images indexed in the BK-Tree within Hamming distance."""
+        dhash = MultiPerceptualHasher.compute_dhash(image)
+        return self.bktree.search(dhash, max_distance=max_distance)
+
+    def index_image_array(
+        self,
+        image_array: np.ndarray,
+        record_id: str,
+        source_url: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        enforce_fiqa: bool = False
+    ) -> Dict[str, Any]:
+        """Indexes an image represented as a numpy array."""
+        image = Image.fromarray(image_array.astype(np.uint8))
+        return self.process_and_index_image(
+            image=image,
+            record_id=record_id,
+            source_url=source_url,
+            metadata=metadata,
+            enforce_fiqa=enforce_fiqa
+        )
+
+    def search_probe_array(
+        self,
+        probe_array: np.ndarray,
+        top_k: int = 10,
+        threshold: float = 0.60
+    ) -> List[MatchResult]:
+        """Runs a probe search using a numpy image array, returning MatchResult objects."""
+        image = Image.fromarray(probe_array.astype(np.uint8))
+        aligned_crop = image.resize((112, 112))
+        probe_vector = self.embedder.extract_from_pil(aligned_crop)
+        return self.vector_store.search(probe_vector, top_k=top_k, threshold=threshold)
+
+    def load_index(self, path: Optional[str] = None):
+        """Loads vector store and partitioned index from disk."""
+        target_path = path or self.vector_store_path
+        self.vector_store_path = target_path
+        if os.path.exists(target_path):
+            self.vector_store = VectorStore.load(target_path)
+            self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
+            if self.vector_store.vectors is not None:
+                for idx, r in enumerate(self.vector_store.records):
+                    self.partitioned_index.add_record(
+                        record_id=r["record_id"],
+                        vector=self.vector_store.vectors[idx],
+                        source_url=r["source_url"],
+                        metadata=r["metadata"]
+                    )
+                    fingerprint = r.get("metadata", {}).get("fingerprint", {})
+                    dhash = fingerprint.get("dhash")
+                    if dhash:
+                        self.bktree.insert(dhash, {"record_id": r["record_id"]})
+                self.partitioned_index.build_partitions()
+        partitioned_path = target_path + ".partitioned"
+        if os.path.exists(partitioned_path):
+            self.partitioned_index = PartitionedVectorIndex.load(partitioned_path)
+
+    def save_index(self, path: Optional[str] = None):
+        """Persists vector store and partitioned index to disk."""
+        target_path = path or self.vector_store_path
+        self.vector_store.save(target_path)
+        self.partitioned_index.save(target_path + ".partitioned")

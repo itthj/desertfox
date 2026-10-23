@@ -141,7 +141,7 @@ DesertFox is built strictly as an educational and defensive security project:
 - [x] Unit test suite
 - [x] ONNX-runtime weights connector for SCRFD + ArcFace (Glint360k)
 - [x] Dockerfile & Docker Compose multi-stage containerization
-- [ ] Distributed Celery/Redis crawler task queue
+- [x] Distributed Celery/Redis crawler task queue
 
 ---
 

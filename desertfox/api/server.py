@@ -119,6 +119,44 @@ def crawl_website(req: CrawlRequest):
         raise HTTPException(status_code=400, detail=f"Crawl failed: {str(e)}")
 
 
+@app.post("/api/queue/crawl")
+def enqueue_crawl_job(req: CrawlRequest):
+    """Dispatches a background web crawl job to the distributed Celery/Redis task queue."""
+    try:
+        from desertfox.queue.tasks import crawl_and_index_task
+        task = crawl_and_index_task.delay(target_url=req.target_url, max_images=req.max_images)
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "target_url": req.target_url,
+            "message": "Harvesting job successfully dispatched to Celery worker queue"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue task: {str(e)}")
+
+
+@app.get("/api/queue/task/{task_id}")
+def get_task_status(task_id: str):
+    """Queries status and telemetry for a distributed background harvesting task."""
+    try:
+        from desertfox.queue.celery_app import celery_app
+        task = celery_app.AsyncResult(task_id)
+        response = {
+            "task_id": task_id,
+            "status": task.status,
+            "ready": task.ready()
+        }
+        if task.successful():
+            response["result"] = task.result
+        elif task.failed():
+            response["error"] = str(task.result)
+        elif task.status == "PROGRESS":
+            response["progress"] = task.info
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to inspect task: {str(e)}")
+
+
 @app.post("/api/opt-out")
 def register_optout(req: OptOutRequest):
     """Registers a face into the Zero-Knowledge Opt-Out table."""

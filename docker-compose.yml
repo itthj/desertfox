@@ -1,17 +1,38 @@
 # ==============================================================================
-# DesertFox Docker Compose — Development & Production Deployment
+# DesertFox Docker Compose — Distributed OSINT Architecture
 # ==============================================================================
 #
-# Usage:
-#   docker compose up              # Start the HUD web application
-#   docker compose up -d           # Start in background (detached)
-#   docker compose --profile models up  # Start + download ONNX models first
-#   docker compose down            # Stop all services
+# Services:
+#   1. desertfox: FastAPI Web Application & Cyber-OSINT HUD
+#   2. redis: Broker & Results Backend for Distributed Crawling
+#   3. celery-worker: Distributed asynchronous image crawler & biometric indexer
+#   4. model-downloader (profile): Pulls ONNX SCRFD & ArcFace weights
 #
-# Access the Cyber-OSINT HUD at: http://localhost:8000
+# Usage:
+#   docker compose up -d                  # Start web app, redis & celery worker
+#   docker compose --profile models up    # Download models and start full stack
+#   docker compose down                   # Graceful shutdown
+#
+# Cyber-OSINT HUD: http://localhost:8000
 # ==============================================================================
 
 services:
+  # In-Memory Message Broker & Result Store
+  redis:
+    image: redis:7-alpine
+    container_name: desertfox-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - desertfox-redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Web API & Cyber-OSINT HUD
   desertfox:
     build:
       context: .
@@ -20,12 +41,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Persist vector store index and opt-out registry across restarts
       - desertfox-data:/app/data
-      # Mount model weights so they persist and can be pre-downloaded
       - desertfox-models:/app/desertfox/models/weights
     environment:
       - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DESERTFOX_REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/stats"]
@@ -33,7 +58,29 @@ services:
       timeout: 5s
       retries: 3
 
-  # Optional: one-shot model downloader
+  # Distributed Asynchronous Crawler Worker
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: desertfox-crawler-worker
+    volumes:
+      - desertfox-data:/app/data
+      - desertfox-models:/app/desertfox/models/weights
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DESERTFOX_REDIS_HOST=redis
+      - DESERTFOX_INDEX_PATH=/app/data/desertfox.index
+      - CELERY_WORKER_CONCURRENCY=4
+    command: ["celery", "-A", "desertfox.queue.celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional one-shot model downloader
   model-downloader:
     build:
       context: .
@@ -49,4 +96,6 @@ volumes:
   desertfox-data:
     driver: local
   desertfox-models:
+    driver: local
+  desertfox-redis-data:
     driver: local

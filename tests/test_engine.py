@@ -294,5 +294,15 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertIn("https://example.com/lazy-loaded-face.jpg", candidates)
         self.assertNotIn("https://example.com/icon.svg", candidates)
 
+    def test_celery_task_definitions(self):
+        """Verify Celery task registration and distributed queue configuration."""
+        from desertfox.queue.celery_app import celery_app
+        from desertfox.queue.tasks import crawl_and_index_task, batch_crawl_targets_task
+
+        self.assertIn("desertfox.crawl_and_index", celery_app.tasks)
+        self.assertIn("desertfox.batch_crawl_targets", celery_app.tasks)
+        self.assertEqual(crawl_and_index_task.name, "desertfox.crawl_and_index")
+        self.assertEqual(batch_crawl_targets_task.name, "desertfox.batch_crawl_targets")
+
 if __name__ == "__main__":
     unittest.main()

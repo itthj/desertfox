@@ -76,13 +76,39 @@ python3 -m desertfox.cli index-demo --count 5 --store ./data/desertfox.index
 python3 -m desertfox.cli search-demo --store ./data/desertfox.index --threshold 0.60
 ```
 
-#### Generate a formal GDPR Article 17 Erasure notice:
+#### Generate a formal GDPR Article 17, DMCA, or CCPA Erasure notice:
 ```bash
 python3 -m desertfox.cli takedown \
     --url "https://unauthorized-site.example/leaked.jpg" \
     --name "Jane Doe" \
     --email "jane@example.com" \
-    --type gdpr
+    --type gdpr  # Choices: gdpr, dmca, ccpa
+```
+
+#### Download Production ONNX Models (SCRFD Face Detection & ArcFace Embeddings):
+```bash
+# List available models in the registry:
+python3 -m desertfox.models.download --list
+
+# Download both detector and embedder weights:
+python3 -m desertfox.models.download --model all
+```
+
+---
+
+### 4. Docker Deployment
+
+Deploy DesertFox with a single command:
+```bash
+# Launch with Docker Compose
+docker compose up -d
+
+# Open Cyber-OSINT HUD: http://localhost:8000
+```
+
+To automatically pull pre-trained ONNX models on container startup:
+```bash
+docker compose --profile models up -d
 ```
 
 ---
@@ -108,12 +134,13 @@ DesertFox is built strictly as an educational and defensive security project:
 
 - [x] Core architecture specification & metric learning design
 - [x] Vector storage interface (Cosine Similarity & metadata indexing)
-- [x] Automated GDPR / DMCA takedown notice generator
+- [x] Automated GDPR / DMCA / CCPA takedown notice generator
 - [x] Zero-Knowledge Opt-Out (ZKO) cryptographic registry
-- [x] Web harvester with `dHash` perceptual deduplication
+- [x] Web harvester with `dHash` perceptual deduplication & BK-Tree metric indexing
 - [x] Interactive Cyber-OSINT HUD Web Application & REST API
 - [x] Unit test suite
-- [ ] ONNX-runtime weights connector for RetinaFace + InsightFace Buffalo_l
+- [x] ONNX-runtime weights connector for SCRFD + ArcFace (Glint360k)
+- [x] Dockerfile & Docker Compose multi-stage containerization
 - [ ] Distributed Celery/Redis crawler task queue
 
 ---

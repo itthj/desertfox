@@ -1,0 +1,16 @@
+# Core dependencies for DesertFox
+numpy>=1.24.0
+pydantic>=2.0.0
+fastapi>=0.100.0
+uvicorn>=0.22.0
+requests>=2.28.0
+
+# Optional / Feature-specific dependencies:
+# Vector database indexing:
+# faiss-cpu>=1.7.4  # For large-scale vector similarity
+# qdrant-client>=1.6.0  # For distributed production vector DB
+
+# Computer Vision & Inference:
+# opencv-python>=4.8.0
+# onnxruntime>=1.16.0  # For running RetinaFace and ArcFace ONNX weights
+# insightface>=0.7.3  # Optional direct library

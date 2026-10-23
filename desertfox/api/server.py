@@ -94,27 +94,27 @@ def index_single_image(req: IndexImageRequest):
     """Indexes a single image into the database."""
     try:
         image = decode_base64_image(req.image_base64)
-        success = engine.process_and_index_image(
+        res = engine.process_and_index_image(
             image=image,
             record_id=req.record_id,
             source_url=req.source_url,
             metadata=req.metadata
         )
-        if success:
+        if res.get("success"):
             engine.save_index()
-            return {"status": "indexed", "record_id": req.record_id}
+            return {"status": "indexed", "record_id": req.record_id, "fiqa_score": res.get("fiqa_score")}
         else:
-            return {"status": "skipped", "reason": "Excluded by Opt-Out registry or duplicate"}
+            return {"status": "skipped", "reason": res.get("reason", "Excluded or low quality")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Indexing failed: {str(e)}")
 
 
 @app.post("/api/index/crawl")
 def crawl_website(req: CrawlRequest):
-    """Crawls a website and ingests public images."""
+    """Crawls a website with advanced harvester, extracting OSINT metadata and public images."""
     try:
-        count = engine.crawl_and_index_url(req.target_url, max_images=req.max_images)
-        return {"status": "completed", "crawled_url": req.target_url, "newly_indexed_images": count}
+        crawl_res = engine.crawl_and_index_target(req.target_url, max_images=req.max_images)
+        return crawl_res
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Crawl failed: {str(e)}")
 

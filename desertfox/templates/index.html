@@ -629,24 +629,43 @@
                 const card = document.createElement('div');
                 card.className = 'p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all space-y-3';
                 
-                const simPercent = Math.round(m.similarity_score * 100);
-                const badgeColor = simPercent >= 80 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/30';
+                const simPercent = Math.round(m.similarity * 100);
+                const badgeColor = simPercent >= 78 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : (simPercent >= 62 ? 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/30');
+                const meta = m.metadata || {};
+                const pageTitle = meta.page_title || meta.domain || 'Direct Image Source';
+                const hostIp = meta.host_ip ? ` • IP: ${meta.host_ip}` : '';
+                const author = meta.author ? ` • Author: ${meta.author}` : '';
+                const forensics = meta.forensics || {};
+                const gps = forensics.gps || null;
+                const mapLink = forensics.map_link || (gps ? `https://www.google.com/maps?q=${gps.latitude},${gps.longitude}` : null);
+                const camera = (forensics.camera_make && forensics.camera_make !== 'Unknown') ? `${forensics.camera_make} ${forensics.camera_model}` : null;
+                const dhash = (meta.fingerprint && meta.fingerprint.dhash) ? meta.fingerprint.dhash : (meta.dhash || 'N/A');
 
                 card.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
-                        <div class="space-y-1">
-                            <div class="flex items-center space-x-2">
+                        <div class="space-y-1.5 flex-1 min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
                                 <span class="mono text-xs font-bold text-white">#${idx + 1} ${m.record_id}</span>
                                 <span class="mono text-[10px] px-2 py-0.5 rounded border ${badgeColor}">${simPercent}% SIMILARITY (${m.confidence})</span>
+                                <span class="mono text-[10px] text-slate-400">L2: ${m.l2_distance || 'N/A'}</span>
                             </div>
-                            <div class="text-xs text-slate-400 truncate max-w-md mono">
+                            <div class="text-xs text-slate-200 font-semibold truncate mono">
+                                ${pageTitle} <span class="text-slate-400 font-normal text-[11px]">${hostIp}${author}</span>
+                            </div>
+                            <div class="text-xs text-slate-400 truncate mono">
                                 <a href="${m.source_url}" target="_blank" class="hover:text-emerald-400 underline">${m.source_url}</a>
                             </div>
+                            ${camera ? `<div class="text-[11px] mono text-cyan-300">📷 Camera: ${camera}</div>` : ''}
                         </div>
                     </div>
-                    <div class="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] mono">
-                        <span class="text-slate-400">HASH: ${m.metadata.dhash || 'N/A'}</span>
+                    <div class="flex flex-wrap items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] mono gap-2">
+                        <span class="text-slate-400">FINGERPRINT: <code class="text-slate-300">${dhash}</code></span>
                         <div class="flex items-center space-x-2">
+                            ${mapLink ? `
+                                <a href="${mapLink}" target="_blank" class="px-2.5 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 transition-all flex items-center space-x-1">
+                                    <span>📍</span><span>GPS Map</span>
+                                </a>
+                            ` : ''}
                             <button onclick="openTakedownModal('${m.source_url}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
                                 ⚡ 1-Click Takedown
                             </button>
@@ -717,7 +736,10 @@
                     body: JSON.stringify({ target_url: url, max_images: limit })
                 });
                 const data = await res.json();
-                consoleBox.innerHTML += `\n[✓] Crawl complete. Indexed ${data.newly_indexed_images} unique images.`;
+                const osint = data.page_osint || {};
+                consoleBox.innerHTML += `\n[+] Domain: ${osint.domain || url} | Host IP: ${osint.host_ip || 'N/A'}`;
+                if (osint.page_title) consoleBox.innerHTML += `\n[+] Page Title: "${osint.page_title}"`;
+                consoleBox.innerHTML += `\n[✓] Extracted ${data.candidates_found || 0} candidates. Indexed ${data.newly_indexed_images || 0} unique biometric portraits.`;
                 statusBox.innerText = "DONE";
                 statusBox.className = "text-emerald-400";
                 fetchStats();

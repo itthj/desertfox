@@ -46,6 +46,9 @@ class EngineConfig(BaseModel):
     rate_limit_ms: int = Field(default=250, description="Minimum delay between HTTP requests (ms)")
     audit_max_pages: int = Field(default=30, description="Default page cap for a same-host site audit")
     audit_max_depth: int = Field(default=2, description="Link depth from the seed page during a site audit")
+    audit_max_sites: int = Field(default=10, description="Max seed websites to include in a broad audit")
+    audit_max_pages_total: int = Field(default=200, description="Total pages to collect across a broad audit")
+    search_result_limit: int = Field(default=20, description="Max search results to expand from a query before auditing")
 
 
 # Singleton default config

@@ -46,9 +46,12 @@ class CrawlRequest(BaseModel):
     max_images: int = Field(10, ge=1, le=50)
 
 class AuditRequest(BaseModel):
-    seed_url: str = Field(..., min_length=3, max_length=500, description="One site to walk. Other hosts are not followed.")
-    max_pages: int = Field(30, ge=1, le=100)
-    max_images: int = Field(10, ge=1, le=25)
+    seed_url: Optional[str] = Field(None, min_length=3, max_length=500, description="One site to walk. Other hosts are not followed.")
+    seed_urls: List[str] = Field(default_factory=list, description="Additional sites to expand the crawl across.")
+    search_query: Optional[str] = Field(None, max_length=200, description="Optional query used to expand the search across multiple sites.")
+    max_pages: int = Field(30, ge=1, le=200)
+    max_images: int = Field(10, ge=1, le=50)
+    max_sites: int = Field(10, ge=1, le=50)
 
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
@@ -141,9 +144,29 @@ def index_single_image(req: IndexImageRequest):
 
 @app.post("/api/index/audit")
 def audit_site(req: AuditRequest):
-    """Walks one named host via its sitemap and on-site links, then indexes images."""
+    """Walks one or more named sites via sitemap and on-site links, then indexes images."""
     try:
-        return engine.audit_site(req.seed_url, max_pages=req.max_pages, max_images=req.max_images)
+        seed_candidates: List[str] = []
+        for item in req.seed_urls:
+            if item and item not in seed_candidates:
+                seed_candidates.append(item)
+        if req.seed_url:
+            seed_candidates.insert(0, req.seed_url)
+        if req.search_query:
+            expanded = engine.expand_seed_urls_from_query(req.search_query, limit=req.max_sites * 10)
+            for url in expanded:
+                if url not in seed_candidates:
+                    seed_candidates.append(url)
+        if not seed_candidates:
+            raise HTTPException(status_code=400, detail="No seed URLs or queries were supplied for the audit.")
+        return engine.audit_sites(
+            seed_candidates[: req.max_sites],
+            max_pages=req.max_pages,
+            max_images=req.max_images,
+            max_sites=req.max_sites,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Site audit failed: {str(e)}")
 

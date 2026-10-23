@@ -16,6 +16,8 @@ import xml.etree.ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
 
+from desertfox.security import UnsafeURLError, safe_get
+
 logger = logging.getLogger(__name__)
 
 FetchResult = Tuple[int, str, str, str]
@@ -242,26 +244,15 @@ class SiteCrawler:
     def _http_fetch(self, url: str) -> Optional[FetchResult]:
         self._polite_wait()
         try:
-            response = requests.get(
+            response = safe_get(
                 url,
                 headers=self.headers,
                 timeout=self.timeout,
-                allow_redirects=True,
-                stream=True,
+                max_bytes=self.max_body_bytes,
+                truncate=True,
             )
-            chunks = []
-            size = 0
-            for chunk in response.iter_content(65536):
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                size += len(chunk)
-                if size >= self.max_body_bytes:
-                    break
-            text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
-            content_type = response.headers.get("Content-Type", "")
-            return response.status_code, content_type, text, response.url
-        except requests.RequestException as exc:
+            return response.status_code, response.content_type, response.text, response.url
+        except (requests.RequestException, UnsafeURLError) as exc:
             logger.debug("Fetch failed for %s: %s", url, exc)
             return None
 

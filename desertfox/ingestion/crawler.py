@@ -4,13 +4,13 @@ Extracts public image links from target URLs, computes perceptual hashes to elim
 duplicates, and prepares images for biometric embedding.
 """
 
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Any, Set, Optional
 import io
 from PIL import Image
 from desertfox.core.embedder import PerceptualHasher
+from desertfox.security import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_PAGE_BYTES, safe_get
 
 class WebHarvester:
     def __init__(self, user_agent: str = "DesertFox-OSINT-Defense-Audit/1.0 (+https://github.com/itthj/desertfox)"):
@@ -20,7 +20,7 @@ class WebHarvester:
     def extract_image_urls(self, page_url: str, max_images: int = 20) -> List[str]:
         """Scrapes a public webpage for absolute image URLs."""
         try:
-            resp = requests.get(page_url, headers=self.headers, timeout=10)
+            resp = safe_get(page_url, headers=self.headers, timeout=10, max_bytes=MAX_PAGE_BYTES)
             if resp.status_code != 200:
                 return []
             
@@ -49,11 +49,13 @@ class WebHarvester:
         Returns None if image is duplicate or invalid.
         """
         try:
-            resp = requests.get(image_url, headers=self.headers, timeout=10)
+            resp = safe_get(image_url, headers=self.headers, timeout=10, max_bytes=MAX_IMAGE_BYTES)
             if resp.status_code != 200 or len(resp.content) < 1024:  # skip tiny 1px tracking pixels
                 return None
 
             img = Image.open(io.BytesIO(resp.content))
+            if img.size[0] * img.size[1] > MAX_IMAGE_PIXELS:
+                return None
             # Verify image is valid
             img.verify()
             # Reopen for actual processing (verify closes the image stream)

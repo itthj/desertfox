@@ -12,10 +12,10 @@ import io
 import time
 from typing import List, Dict, Any, Set, Optional
 from urllib.parse import urljoin, urlparse
-import requests
 from bs4 import BeautifulSoup
 from PIL import Image
 
+from desertfox.security import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_PAGE_BYTES, safe_get
 from desertfox.core.hashing import MultiPerceptualHasher
 from desertfox.core.fiqa import FaceQualityAssessment
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
@@ -108,7 +108,7 @@ class AdvancedHarvester:
         self.last_domain_request[domain] = time.time()
 
         try:
-            resp = requests.get(image_url, headers=self.headers, timeout=self.timeout)
+            resp = safe_get(image_url, headers=self.headers, timeout=self.timeout, max_bytes=MAX_IMAGE_BYTES)
             if resp.status_code != 200:
                 return None
 
@@ -119,6 +119,8 @@ class AdvancedHarvester:
             # Open image via PIL
             img = Image.open(io.BytesIO(resp.content))
             w, h = img.size
+            if w * h > MAX_IMAGE_PIXELS:  # decompression-bomb guard
+                return None
 
             # Dimension checks
             if w < self.min_width or h < self.min_height:
@@ -162,7 +164,7 @@ class AdvancedHarvester:
         extracts valid images, and runs biometric validation.
         """
         try:
-            resp = requests.get(page_url, headers=self.headers, timeout=self.timeout)
+            resp = safe_get(page_url, headers=self.headers, timeout=self.timeout, max_bytes=MAX_PAGE_BYTES)
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}", "page_url": page_url, "harvested": []}
 

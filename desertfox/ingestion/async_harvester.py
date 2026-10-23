@@ -20,6 +20,15 @@ try:
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
+from desertfox.security import (
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_PIXELS,
+    MAX_PAGE_BYTES,
+    MAX_REDIRECTS,
+    PayloadTooLargeError,
+    UnsafeURLError,
+    validate_public_url,
+)
 from desertfox.core.hashing import MultiPerceptualHasher
 from desertfox.core.fiqa import FaceQualityAssessment
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
@@ -79,6 +88,40 @@ class AsyncMediaHarvester:
                 filtered.append(u)
         return filtered
 
+    async def _safe_fetch(
+        self,
+        session: 'aiohttp.ClientSession',
+        url: str,
+        max_bytes: int,
+    ) -> "tuple[int, bytes, str, Optional[str]]":
+        """
+        SSRF-safe GET: validates every redirect hop against public-address rules and
+        aborts the download once `max_bytes` is exceeded.
+        Returns (status, body, final_url, charset).
+        """
+        loop = asyncio.get_running_loop()
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            # getaddrinfo blocks, so validate off the event loop.
+            await loop.run_in_executor(None, validate_public_url, current)
+            async with session.get(current, headers=self.headers, allow_redirects=False) as resp:
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return resp.status, b"", current, resp.charset
+                    current = urljoin(current, location)
+                    continue
+
+                if resp.content_length is not None and resp.content_length > max_bytes:
+                    raise PayloadTooLargeError(f"Response exceeds {max_bytes} bytes")
+                body = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise PayloadTooLargeError(f"Response exceeds {max_bytes} bytes")
+                return resp.status, bytes(body), current, resp.charset
+        raise UnsafeURLError(f"Too many redirects (limit {MAX_REDIRECTS})")
+
     async def _fetch_single_media(
         self,
         session: 'aiohttp.ClientSession',
@@ -88,17 +131,12 @@ class AsyncMediaHarvester:
         """Asynchronously downloads image, validates dimensions, computes hashes, and checks FIQA."""
         async with semaphore:
             try:
-                timeout = aiohttp.ClientTimeout(total=self.timeout)
-                async with session.get(image_url, headers=self.headers, timeout=timeout) as resp:
-                    if resp.status != 200:
-                        return None
+                status, content, _final, _charset = await self._safe_fetch(session, image_url, MAX_IMAGE_BYTES)
+                if status != 200 or len(content) < 2048:
+                    return None
 
-                    content = await resp.read()
-                    if len(content) < 2048:
-                        return None
-
-                    loop = asyncio.get_event_loop()
-                    return await loop.run_in_executor(None, self._process_image_bytes, content, image_url)
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, self._process_image_bytes, content, image_url)
             except Exception as e:
                 logger.debug("Failed async fetch for %s: %s", image_url, e)
                 return None
@@ -108,6 +146,8 @@ class AsyncMediaHarvester:
         try:
             img = Image.open(io.BytesIO(content))
             w, h = img.size
+            if w * h > MAX_IMAGE_PIXELS:  # decompression-bomb guard
+                return None
             if w < self.min_width or h < self.min_height:
                 return None
 
@@ -145,10 +185,10 @@ class AsyncMediaHarvester:
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(page_url, headers=self.headers) as resp:
-                    if resp.status != 200:
-                        return {"error": f"HTTP {resp.status}", "page_url": page_url, "harvested": []}
-                    html_text = await resp.text()
+                status, body, _final, charset = await self._safe_fetch(session, page_url, MAX_PAGE_BYTES)
+                if status != 200:
+                    return {"error": f"HTTP {status}", "page_url": page_url, "harvested": []}
+                html_text = body.decode(charset or "utf-8", errors="replace")
 
                 page_osint = ForensicMetadataExtractor.extract_page_osint_context(html_text, page_url)
                 candidates = self.extract_image_candidates_from_html(html_text, page_url)

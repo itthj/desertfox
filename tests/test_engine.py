@@ -428,7 +428,13 @@ class TestDesertFoxV2(unittest.TestCase):
         """Real HTTP fetch stays on the local host and records robots.txt skips."""
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest import mock
         from desertfox.ingestion.site_crawler import SiteCrawler
+
+        # The test server is on loopback, which the SSRF guard blocks unless explicitly allowed.
+        patcher = mock.patch.dict(os.environ, {"DESERTFOX_ALLOW_PRIVATE_URLS": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         routes = {
             "/robots.txt": ("User-agent: *\nDisallow: /secret\n", "text/plain"),

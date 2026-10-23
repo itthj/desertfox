@@ -238,5 +238,61 @@ class TestDesertFoxV2(unittest.TestCase):
             dups = engine2.find_perceptual_duplicates(img, max_distance=5)
             self.assertGreaterEqual(len(dups), 1)
 
+    def test_faiss_vector_index(self):
+        """Verify FAISS vector index creation, query retrieval, and persistence."""
+        import tempfile
+        from desertfox.storage.faiss_index import FaissVectorIndex, FAISS_AVAILABLE
+
+        if not FAISS_AVAILABLE:
+            self.skipTest("faiss-cpu is not installed in the environment.")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            idx_path = os.path.join(tmpdir, "faiss.index")
+            faiss_idx = FaissVectorIndex(embedding_dim=512, index_type="Flat")
+
+            vec1 = np.ones(512, dtype=np.float32) / np.sqrt(512)
+            faiss_idx.add_record(
+                record_id="faiss_rec_01",
+                vector=vec1,
+                source_url="https://example.com/faiss01.jpg",
+                metadata={"test": "faiss"}
+            )
+
+            matches = faiss_idx.search(vec1, top_k=5, threshold=0.70)
+            self.assertGreaterEqual(len(matches), 1)
+            self.assertEqual(matches[0].record_id, "faiss_rec_01")
+            self.assertAlmostEqual(matches[0].similarity, 1.0, places=2)
+
+            faiss_idx.save(idx_path)
+            self.assertTrue(os.path.exists(idx_path))
+            self.assertTrue(os.path.exists(idx_path + ".records.json"))
+
+            loaded = FaissVectorIndex.load(idx_path)
+            self.assertEqual(len(loaded.records), 1)
+            loaded_matches = loaded.search(vec1, top_k=5, threshold=0.70)
+            self.assertEqual(loaded_matches[0].record_id, "faiss_rec_01")
+
+    def test_async_harvester_parsing(self):
+        """Verify candidate extraction in AsyncMediaHarvester."""
+        from desertfox.ingestion.async_harvester import AsyncMediaHarvester
+        harvester = AsyncMediaHarvester()
+        sample_html = """
+        <html>
+            <head>
+                <meta property="og:image" content="/social-preview.png">
+            </head>
+            <body>
+                <img src="/avatar-large.jpg">
+                <img data-src="/lazy-loaded-face.jpg">
+                <img src="/icon.svg">
+            </body>
+        </html>
+        """
+        candidates = harvester.extract_image_candidates_from_html(sample_html, "https://example.com/profile")
+        self.assertIn("https://example.com/social-preview.png", candidates)
+        self.assertIn("https://example.com/avatar-large.jpg", candidates)
+        self.assertIn("https://example.com/lazy-loaded-face.jpg", candidates)
+        self.assertNotIn("https://example.com/icon.svg", candidates)
+
 if __name__ == "__main__":
     unittest.main()

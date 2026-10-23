@@ -26,8 +26,15 @@ from desertfox.storage.advanced_index import PartitionedVectorIndex
 from desertfox.storage.vector_store import VectorStore, MatchResult
 from desertfox.privacy.optout import ZeroKnowledgeOptOutRegistry
 from desertfox.ingestion.harvester import AdvancedHarvester
+from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
 from desertfox.config import EngineConfig
+
+try:
+    from desertfox.storage.faiss_index import FaissVectorIndex, FAISS_AVAILABLE
+except ImportError:
+    FAISS_AVAILABLE = False
+    FaissVectorIndex = None
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +109,20 @@ class DesertFoxEngine:
 
         self.optout_registry = ZeroKnowledgeOptOutRegistry(registry_file=optout_registry_path)
         self.harvester = AdvancedHarvester()
+        self.async_harvester = AsyncMediaHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
+
+        # Optional FAISS High-Speed Vector Index
+        self.faiss_index = None
+        if self.config.use_faiss and FAISS_AVAILABLE and FaissVectorIndex is not None:
+            try:
+                self.faiss_index = FaissVectorIndex(
+                    embedding_dim=self.embedder.embedding_dim,
+                    index_type=self.config.faiss_index_type
+                )
+                logger.info("FAISS vector index enabled (type: %s)", self.config.faiss_index_type)
+            except Exception as e:
+                logger.warning("Could not initialize FAISS index: %s", e)
 
         # Initialize BK-Tree for perceptual near-duplicate filtering
         self.bktree = BKTree()
@@ -191,6 +211,8 @@ class DesertFoxEngine:
         # Add to vector stores
         self.vector_store.add(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
         self.partitioned_index.add_record(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
+        if self.faiss_index is not None:
+            self.faiss_index.add_record(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
 
         return {
             "success": True,
@@ -249,9 +271,12 @@ class DesertFoxEngine:
             "matches": matches
         }
 
-    def crawl_and_index_target(self, target_url: str, max_images: int = 15) -> Dict[str, Any]:
-        """Runs the advanced media harvester across target webpage and indexes images."""
-        harvest_result = self.harvester.crawl_target(target_url, max_harvest=max_images)
+    def crawl_and_index_target(self, target_url: str, max_images: int = 15, use_async: bool = True) -> Dict[str, Any]:
+        """Runs media harvester across target webpage and indexes images."""
+        if use_async:
+            harvest_result = self.async_harvester.crawl_target(target_url, max_harvest=max_images)
+        else:
+            harvest_result = self.harvester.crawl_target(target_url, max_harvest=max_images)
         if harvest_result.get("error"):
             return {"status": "error", "message": harvest_result["error"], "indexed": 0}
 
@@ -350,7 +375,9 @@ class DesertFoxEngine:
             self.partitioned_index = PartitionedVectorIndex.load(partitioned_path)
 
     def save_index(self, path: Optional[str] = None):
-        """Persists vector store and partitioned index to disk."""
+        """Persists vector store, partitioned index, and optional FAISS index to disk."""
         target_path = path or self.vector_store_path
         self.vector_store.save(target_path)
         self.partitioned_index.save(target_path + ".partitioned")
+        if self.faiss_index is not None:
+            self.faiss_index.save(target_path + ".faiss")

@@ -21,6 +21,8 @@ class EngineConfig(BaseModel):
 
     # Storage
     vector_store_path: str = Field(default="./data/desertfox.index", description="Path to persist vector store index")
+    use_faiss: bool = Field(default=True, description="Enable FAISS-accelerated vector indexing if available")
+    faiss_index_type: str = Field(default="Flat", description="FAISS index type: 'Flat', 'HNSW', or 'IVF'")
     max_top_k: int = Field(default=10, description="Max nearest neighbor candidates to return")
 
     # Inference

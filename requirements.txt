@@ -10,6 +10,7 @@ onnxruntime>=1.16.0
 opencv-python-headless>=4.8.0
 
 # Optional / Advanced deployments:
-# faiss-cpu>=1.7.4       # Large-scale vector similarity (millions of faces)
+faiss-cpu>=1.7.4       # Large-scale vector similarity (millions of faces)
+aiohttp>=3.8.0         # High-throughput asynchronous harvesting
 # qdrant-client>=1.6.0   # Distributed production vector DB
 # insightface>=0.7.3     # High-level InsightFace library wrapper

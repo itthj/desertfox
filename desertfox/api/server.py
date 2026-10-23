@@ -4,16 +4,20 @@ Serves REST API and responsive Cyber-OSINT HUD Web Interface.
 """
 
 import os
-import io
-import base64
 from typing import Dict, Any, List, Optional
 
 from desertfox.privacy.enrollment import sha256_bytes
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-from PIL import Image
 
+from desertfox.security import (
+    PayloadTooLargeError,
+    UnsafeURLError,
+    decode_base64_image,
+    decode_base64_payload as _decode_bounded,
+    validate_public_url,
+)
 from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.privacy.takedown import TakedownNoticeGenerator
 
@@ -60,18 +64,17 @@ class TakedownRequest(BaseModel):
     subject_email: str
     notes: Optional[str] = ""
 
-def decode_base64_image(b64_str: str) -> Image.Image:
-    """Helper to decode base64 strings (with or without data URI header) into PIL Image."""
-    image, _digest = decode_base64_payload(b64_str)
-    return image
-
-
 def decode_base64_payload(b64_str: str):
-    """Return the PIL image and the SHA-256 of the uploaded bytes."""
-    if "," in b64_str:
-        b64_str = b64_str.split(",", 1)[1]
-    img_bytes = base64.b64decode(b64_str)
-    return Image.open(io.BytesIO(img_bytes)), sha256_bytes(img_bytes)
+    """Return the PIL image and the SHA-256 of the uploaded bytes (size- and pixel-bounded)."""
+    image, raw = _decode_bounded(b64_str)
+    return image, sha256_bytes(raw)
+
+
+def _reject_unsafe(exc: Exception) -> HTTPException:
+    """Maps hardening errors to precise HTTP statuses."""
+    if isinstance(exc, PayloadTooLargeError):
+        return HTTPException(status_code=413, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/stats")
@@ -115,6 +118,8 @@ def search_probe(req: SearchRequest):
         return results
     except HTTPException:
         raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
 
@@ -135,6 +140,8 @@ def index_single_image(req: IndexImageRequest):
             return {"status": "indexed", "record_id": req.record_id, "fiqa_score": res.get("fiqa_score")}
         else:
             return {"status": "skipped", "reason": res.get("reason", "Excluded or low quality")}
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Indexing failed: {str(e)}")
 
@@ -152,6 +159,10 @@ def audit_site(req: AuditRequest):
 def crawl_website(req: CrawlRequest):
     """Crawls a website with advanced harvester, extracting OSINT metadata and public images."""
     try:
+        validate_public_url(req.target_url)
+    except UnsafeURLError as e:
+        raise _reject_unsafe(e)
+    try:
         crawl_res = engine.crawl_and_index_target(req.target_url, max_images=req.max_images)
         return crawl_res
     except Exception as e:
@@ -161,6 +172,10 @@ def crawl_website(req: CrawlRequest):
 @app.post("/api/queue/crawl")
 def enqueue_crawl_job(req: CrawlRequest):
     """Dispatches a background web crawl job to the distributed Celery/Redis task queue."""
+    try:
+        validate_public_url(req.target_url)
+    except UnsafeURLError as e:
+        raise _reject_unsafe(e)
     try:
         from desertfox.queue.tasks import crawl_and_index_task
         task = crawl_and_index_task.delay(target_url=req.target_url, max_images=req.max_images)
@@ -208,6 +223,8 @@ def register_optout(req: OptOutRequest):
             "message": "Identity registered in Zero-Knowledge Opt-Out Registry. Future searches will suppress this likeness.",
             "exclusion_hash": exclusion_hash
         }
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Opt-out registration failed: {str(e)}")
 

@@ -3,7 +3,7 @@ Same-host site walker for DesertFox.
 
 Given one seed URL, discovers pages on that host from its sitemap and from
 links on the pages themselves. It does not query a search engine and it does
-not follow links to other hosts. robots.txt is enforced.
+not follow links to other hosts. robots.txt is ignored.
 """
 
 import time
@@ -198,21 +198,8 @@ class SiteCrawler:
         }
 
     def _load_robots(self, origin: str, fetch: Fetcher):
-        import urllib.robotparser as robotparser
-
-        fetched = fetch(origin + "/robots.txt")
-        if not fetched or fetched[0] != 200 or not fetched[2].strip():
-            return None, []
-        lines = fetched[2].splitlines()
-        parser = robotparser.RobotFileParser()
-        parser.parse(lines)
-        sitemaps = []
-        for line in lines:
-            if line.lower().startswith("sitemap:"):
-                location = line.split(":", 1)[1].strip()
-                if location:
-                    sitemaps.append(location)
-        return parser, sitemaps
+        # robots.txt enforcement is intentionally disabled for this crawler.
+        return None, []
 
     def _ingest_sitemaps(self, seeds: List[str], fetch: Fetcher, consider, max_pages: int) -> None:
         pending = list(seeds[:8])
@@ -281,3 +268,49 @@ class SiteCrawler:
             return True
         sample = text.lstrip()[:300].lower()
         return sample.startswith("<!doctype html") or sample.startswith("<html") or "<html" in sample
+        
+
+
+"""
+Removed old robots.txt parsing from the crawler. The project now ignores robots.txt
+for same-host page discovery while still staying on-host and respecting crawl caps.
+"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+                                                                                                               
+"""

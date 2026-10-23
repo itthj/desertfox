@@ -531,5 +531,68 @@ class TestDesertFoxV2(unittest.TestCase):
         finally:
             server.engine.enrollment = previous
 
+    def test_audit_refuses_to_run_without_an_enrolled_face(self):
+        """A searcher-only audit does not fetch a site until the enrolled face can be filtered."""
+        import tempfile
+        from desertfox.config import EngineConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "empty.index"), use_faiss=False)
+            engine = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+            result = engine.audit_site("https://example.com", max_pages=5)
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(len(engine.vector_store.records), 0)
+            self.assertIn("ArcFace", result["message"])
+
+    def test_searcher_only_index_keeps_enrolled_face_and_drops_others(self):
+        """Only the enrolled embedding is stored when searcher-only indexing is on."""
+        import tempfile
+        from desertfox.config import EngineConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "only.index"), use_faiss=False)
+            engine = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+            engine.embedder.verifies_identity = True
+            enrolled_vector = np.zeros(engine.embedder.embedding_dim, dtype=np.float32)
+            enrolled_vector[0] = 1.0
+            other_vector = np.zeros(engine.embedder.embedding_dim, dtype=np.float32)
+            other_vector[1] = 1.0
+
+            def embed_by_marker(image):
+                arr = np.asarray(image)
+                center = int(arr[arr.shape[0] // 2, arr.shape[1] // 2, 0])
+                return other_vector if center > 127 else enrolled_vector
+
+            engine.embedder.extract_from_pil = embed_by_marker
+            enrolled_image = np.zeros((112, 112, 3), dtype=np.uint8)
+            enrolled_image[:, 56:, :] = 255
+            enrolled_image[40:72, 40:72, :] = 0
+            other_image = np.zeros((112, 112, 3), dtype=np.uint8)
+            other_image[56:, :, :] = 255
+            other_image[40:72, 40:72, :] = 255
+            engine.enrollment.vector = enrolled_vector
+            engine.enrollment.mode = "arcface"
+            engine.enrollment.file_sha256 = "enrolled"
+            engine.enrollment.match_threshold = 0.55
+
+            kept = engine.process_and_index_image(
+                Image.fromarray(enrolled_image),
+                "searcher",
+                "https://example.com/searcher.jpg",
+                enforce_fiqa=False,
+                only_enrolled=True,
+            )
+            dropped = engine.process_and_index_image(
+                Image.fromarray(other_image),
+                "someone_else",
+                "https://example.com/other.jpg",
+                enforce_fiqa=False,
+                only_enrolled=True,
+            )
+            self.assertTrue(kept["success"])
+            self.assertFalse(dropped["success"])
+            self.assertTrue(dropped["other_face"])
+            self.assertEqual([record["record_id"] for record in engine.vector_store.records], ["searcher"])
+
 if __name__ == "__main__":
     unittest.main()

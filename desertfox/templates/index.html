@@ -239,7 +239,7 @@
             <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
                 <div class="border-b border-slate-800 pb-3">
                     <h2 class="text-sm font-semibold mono text-emerald-400">[SITE_AUDIT_AND_INGESTION]</h2>
-                    <p class="text-xs text-slate-400">Name one site. DesertFox reads its sitemap and follows links on that host only, skips paths blocked by robots.txt, then indexes images from the pages it finds.</p>
+                    <p class="text-xs text-slate-400">Name one site. DesertFox walks that host only, keeps images of the enrolled face, and discards every other face. robots.txt is enforced. ArcFace weights are required so other people are not stored by mistake.</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -767,7 +767,7 @@
                 if (!res.ok || data.status === "error") {
                     throw new Error(data.detail || data.message || "Audit failed");
                 }
-                consoleBox.innerHTML += `\n[+] Host: ${data.host} | Pages: ${data.pages_discovered} | robots.txt skips: ${data.pages_skipped_robots}`;
+                consoleBox.innerHTML += `\n[+] Host: ${data.host} | Pages: ${data.pages_discovered} | robots.txt skips: ${data.pages_skipped_robots} | other faces discarded: ${data.skipped_other_faces || 0}`;
                 (data.pages || []).forEach((page) => {
                     consoleBox.innerHTML += `\n    ${page.url} -> ${page.indexed} indexed`;
                 });

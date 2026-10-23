@@ -125,7 +125,7 @@ def main():
             print(f"[!] {result.get('message', 'Audit failed')}")
             sys.exit(1)
         print(f"[✓] Host {result['host']}: {result['pages_discovered']} pages, {result['pages_skipped_robots']} blocked by robots.txt")
-        print(f"[✓] Indexed {result['newly_indexed_images']} images into {args.store}")
+        print(f"[✓] Indexed {result['newly_indexed_images']} images of the enrolled face. Discarded {result.get('skipped_other_faces', 0)} other faces.")
         for page in result["pages"]:
             print(f"    - {page['url']} -> {page['indexed']} indexed")
 

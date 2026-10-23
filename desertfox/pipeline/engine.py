@@ -142,7 +142,8 @@ class DesertFoxEngine:
         record_id: str,
         source_url: str,
         metadata: Optional[Dict[str, Any]] = None,
-        enforce_fiqa: bool = True
+        enforce_fiqa: bool = True,
+        only_enrolled: bool = False,
     ) -> Dict[str, Any]:
         """
         Validates quality with FIQA, detects & crops face, checks opt-out table,
@@ -201,6 +202,21 @@ class DesertFoxEngine:
                 "reason": "Likeness registered in Zero-Knowledge Opt-Out Registry.",
                 "fiqa": fiqa
             }
+
+        if only_enrolled:
+            blocked = self._searcher_only_block()
+            if blocked:
+                return {"success": False, "reason": blocked, "fiqa": fiqa}
+            similarity = float(np.dot(self._unit(embedding), self._unit(self.enrollment.vector)))
+            if similarity < self.enrollment.match_threshold:
+                return {
+                    "success": False,
+                    "reason": "Not the enrolled face",
+                    "similarity": round(similarity, 4),
+                    "other_face": True,
+                    "fiqa": fiqa,
+                }
+            meta["enrolled_similarity"] = round(similarity, 4)
 
         if dhash:
             self.bktree.insert(dhash, {"record_id": record_id})
@@ -263,6 +279,25 @@ class DesertFoxEngine:
             aligned_crop = probe_image.resize((112, 112))
         return detected_bbox, self.embedder.extract_from_pil(aligned_crop)
 
+    def _searcher_only_block(self) -> Optional[str]:
+        """Why a searcher-only crawl cannot run. Empty when the enrolled face can be filtered."""
+        if not getattr(self.embedder, "verifies_identity", False):
+            return (
+                "Load the ArcFace weights before a searcher-only audit. "
+                "The heuristic embedder cannot separate the enrolled face from anyone else."
+            )
+        if not self.enrollment.enrolled or self.enrollment.mode != "arcface" or self.enrollment.vector is None:
+            return "Enroll the searcher's face before the audit. Other faces are not stored."
+        return None
+
+    @staticmethod
+    def _unit(vector: np.ndarray) -> np.ndarray:
+        vector = np.ascontiguousarray(vector, dtype=np.float32)
+        norm = float(np.linalg.norm(vector))
+        if norm > 0:
+            vector = vector / norm
+        return vector
+
     def authorize_probe(self, probe_image: Image.Image, file_sha256: str) -> Dict[str, Any]:
         """Enroll the first face. Reject a later probe of a different person."""
         _bbox, vector = self.embed_probe(probe_image)
@@ -272,7 +307,14 @@ class DesertFoxEngine:
             identity_embedder=bool(getattr(self.embedder, "verifies_identity", False)),
         )
 
-    def crawl_and_index_target(self, target_url: str, max_images: int = 15, use_async: bool = True, persist: bool = True) -> Dict[str, Any]:
+    def crawl_and_index_target(
+        self,
+        target_url: str,
+        max_images: int = 15,
+        use_async: bool = True,
+        persist: bool = True,
+        only_enrolled: bool = False,
+    ) -> Dict[str, Any]:
         """Runs media harvester across one webpage and indexes images."""
         if use_async:
             harvest_result = self.async_harvester.crawl_target(target_url, max_harvest=max_images)
@@ -282,6 +324,7 @@ class DesertFoxEngine:
             return {"status": "error", "message": harvest_result["error"], "indexed": 0}
 
         indexed_count = 0
+        skipped_other_faces = 0
         items = harvest_result.get("media_items", [])
         page_osint = harvest_result.get("page_osint", {})
 
@@ -299,10 +342,13 @@ class DesertFoxEngine:
                 record_id=rec_id,
                 source_url=media["url"],
                 metadata=meta,
-                enforce_fiqa=False  # Allow all harvested faces
+                enforce_fiqa=False,
+                only_enrolled=only_enrolled,
             )
             if res.get("success"):
                 indexed_count += 1
+            elif res.get("other_face"):
+                skipped_other_faces += 1
 
         if indexed_count > 0 and persist:
             self.partitioned_index.build_partitions()
@@ -313,14 +359,19 @@ class DesertFoxEngine:
             "page_url": target_url,
             "page_osint": page_osint,
             "candidates_found": harvest_result.get("candidates_discovered", 0),
-            "newly_indexed_images": indexed_count
+            "newly_indexed_images": indexed_count,
+            "skipped_other_faces": skipped_other_faces,
         }
 
     def audit_site(self, seed_url: str, max_pages: Optional[int] = None, max_images: int = 10) -> Dict[str, Any]:
         """
-        Walk pages on one host the operator named, then index images from those pages.
-        Stays on that host, obeys robots.txt, and stops at the page cap.
+        Walk one named host and store only images of the enrolled face.
+        Other faces are compared in memory and discarded. robots.txt and the page cap still apply.
         """
+        blocked = self._searcher_only_block()
+        if blocked:
+            return {"status": "error", "message": blocked, "newly_indexed_images": 0, "pages": [], "skipped_other_faces": 0}
+
         page_cap = max_pages if max_pages is not None else self.config.audit_max_pages
         page_cap = max(1, min(int(page_cap), 100))
         image_cap = max(1, min(int(max_images), 25))
@@ -338,6 +389,7 @@ class DesertFoxEngine:
 
         reports = []
         total_indexed = 0
+        skipped_other_faces = 0
         for page in discovered["pages"]:
             try:
                 result = self.crawl_and_index_target(
@@ -345,17 +397,20 @@ class DesertFoxEngine:
                     max_images=image_cap,
                     use_async=False,
                     persist=False,
+                    only_enrolled=True,
                 )
             except Exception as exc:
                 reports.append({"url": page, "status": "error", "indexed": 0, "error": str(exc)})
                 continue
             indexed = int(result.get("newly_indexed_images", 0))
+            skipped_other_faces += int(result.get("skipped_other_faces", 0))
             total_indexed += indexed
             reports.append({
                 "url": page,
                 "status": result.get("status", "error"),
                 "indexed": indexed,
                 "candidates": result.get("candidates_found", 0),
+                "skipped_other_faces": result.get("skipped_other_faces", 0),
             })
 
         if total_indexed > 0:
@@ -369,6 +424,7 @@ class DesertFoxEngine:
             "pages_discovered": len(discovered["pages"]),
             "pages_skipped_robots": discovered.get("skipped_robots", 0),
             "newly_indexed_images": total_indexed,
+            "skipped_other_faces": skipped_other_faces,
             "pages": reports,
         }
 

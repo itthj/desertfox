@@ -105,6 +105,9 @@
             <button onclick="switchTab('audit')" id="tab-btn-audit" class="px-4 py-2 rounded-t-md font-medium text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/10 flex items-center space-x-2">
                 <span>🔍</span><span>REVERSE BIOMETRIC SEARCH</span>
             </button>
+            <button onclick="switchTab('search')" id="tab-btn-search" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
+                <span>🔎</span><span>AUTOMATED WEB SEARCH SCANNER</span>
+            </button>
             <button onclick="switchTab('crawler')" id="tab-btn-crawler" class="px-4 py-2 rounded-t-md font-medium text-slate-400 hover:text-slate-200 flex items-center space-x-2">
                 <span>🌐</span><span>TARGET CRAWLER & INGESTION</span>
             </button>
@@ -304,6 +307,80 @@
             </div>
         </section>
 
+        <!-- TAB: AUTOMATED WEB SEARCH SCANNER -->
+        <section id="tab-search" class="hidden space-y-6">
+            <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
+                <div class="border-b border-slate-800 pb-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-sm font-semibold mono text-cyan-400">[AUTOMATED_IDENTITY_EXPOSURE_SCANNER]</h2>
+                            <p class="text-xs text-slate-400">Search public web engines (DuckDuckGo, Bing Images) for an individual or handle, harvest discovered portraits, detect faces with SCRFD, extract ArcFace embeddings, and index into FAISS.</p>
+                        </div>
+                        <span class="text-[11px] mono px-2.5 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">ZERO-KEY OSINT</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="md:col-span-2 space-y-2">
+                        <label class="text-xs mono text-slate-400">TARGET NAME, USERNAME, OR IDENTIFIER</label>
+                        <input type="text" id="search-query-input" placeholder="e.g. 'Jane Doe', 'johndoe_osint', 'Jane Doe Stanford'" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 mono">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs mono text-slate-400">MAX RESULTS</label>
+                        <select id="search-limit" class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 mono">
+                            <option value="15">15 Candidates (Fast)</option>
+                            <option value="30" selected>30 Candidates (Recommended)</option>
+                            <option value="60">60 Candidates (Deep Scan)</option>
+                        </select>
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs mono text-slate-400">ENGINES</label>
+                        <div class="flex items-center space-x-3 pt-2 text-xs mono text-slate-300">
+                            <label class="flex items-center space-x-1.5 cursor-pointer">
+                                <input type="checkbox" id="engine-bing" checked class="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0">
+                                <span>Bing</span>
+                            </label>
+                            <label class="flex items-center space-x-1.5 cursor-pointer">
+                                <input type="checkbox" id="engine-ddg" checked class="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0">
+                                <span>DuckDuckGo</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3">
+                    <button onclick="executeSearchHarvest()" id="btn-search-harvest" class="px-6 py-2.5 rounded-lg text-xs mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all flex items-center space-x-2">
+                        <span>🚀</span><span>START AUTOMATED SCAN & INDEX</span>
+                    </button>
+                    <button onclick="enqueueSearchHarvest()" id="btn-queue-search" class="px-4 py-2.5 rounded-lg text-xs mono font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all flex items-center space-x-2">
+                        <span>⏳</span><span>Dispatch to Celery Background Queue</span>
+                    </button>
+                </div>
+
+                <!-- Search Harvester Terminal Log -->
+                <div class="space-y-2">
+                    <div class="text-xs mono text-slate-400 flex items-center justify-between">
+                        <span>SEARCH HARVESTER CONSOLE</span>
+                        <span id="search-harvest-status" class="text-cyan-400">IDLE</span>
+                    </div>
+                    <div id="search-harvest-console" class="bg-[#050811] border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 h-48 overflow-y-auto space-y-1">
+                        <div class="text-slate-400">[*] Automated Search Aggregator ready. Enter an identity query above to scan the public web...</div>
+                    </div>
+                </div>
+
+                <!-- Discovered Media Stream -->
+                <div id="search-results-section" class="hidden space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <span class="text-xs mono font-semibold text-slate-300">DISCOVERED CANDIDATES FROM WEB ENGINES</span>
+                        <button onclick="switchTab('audit')" class="text-xs mono text-emerald-400 hover:underline flex items-center space-x-1">
+                            <span>🔍 Audit Against My Probe Photo &rarr;</span>
+                        </button>
+                    </div>
+                    <div id="search-results-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"></div>
+                </div>
+            </div>
+        </section>
+
         <!-- TAB 3: ZERO-KNOWLEDGE OPT-OUT (ZKO) -->
         <section id="tab-optout" class="hidden space-y-6">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -358,6 +435,7 @@
                         <label class="text-xs mono text-slate-400">LEGAL FRAMEWORK</label>
                         <select id="legal-type" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
                             <option value="gdpr">GDPR Article 17 (Right to Erasure)</option>
+                            <option value="ccpa">CCPA § 1798.105 (Right to Delete)</option>
                             <option value="dmca">DMCA § 512(c) (Copyright Infringement)</option>
                         </select>
                     </div>
@@ -545,17 +623,17 @@
         fetchStats();
 
         function switchTab(tabId) {
-            const tabs = ['audit', 'crawler', 'optout', 'legal', 'compare'];
+            const tabs = ['audit', 'search', 'crawler', 'optout', 'legal', 'compare'];
             tabs.forEach(t => {
                 const sec = document.getElementById(`tab-${t}`);
                 const btn = document.getElementById(`tab-btn-${t}`);
                 if (t === tabId) {
                     sec.classList.remove('hidden');
-                    btn.classList.add('text-emerald-400', 'border-b-2', 'border-emerald-400', 'bg-emerald-500/10');
+                    btn.classList.add('text-cyan-400', 'border-b-2', 'border-cyan-400', 'bg-cyan-500/10');
                     btn.classList.remove('text-slate-400');
                 } else {
                     sec.classList.add('hidden');
-                    btn.classList.remove('text-emerald-400', 'border-b-2', 'border-emerald-400', 'bg-emerald-500/10');
+                    btn.classList.remove('text-cyan-400', 'border-b-2', 'border-cyan-400', 'bg-cyan-500/10');
                     btn.classList.add('text-slate-400');
                 }
             });
@@ -998,6 +1076,107 @@
             }
         }
 
+        // Automated Search Aggregator
+        async function executeSearchHarvest() {
+            const query = document.getElementById('search-query-input').value.trim();
+            if (!query) {
+                alert("Please enter a target name, username, or identity query.");
+                return;
+            }
+
+            const limit = parseInt(document.getElementById('search-limit').value);
+            const consoleBox = document.getElementById('search-harvest-console');
+            const statusBox = document.getElementById('search-harvest-status');
+            const resultsSec = document.getElementById('search-results-section');
+            const resultsGrid = document.getElementById('search-results-grid');
+            const btn = document.getElementById('btn-search-harvest');
+
+            const engines = [];
+            if (document.getElementById('engine-bing').checked) engines.push('bing');
+            if (document.getElementById('engine-ddg').checked) engines.push('duckduckgo');
+
+            btn.disabled = true;
+            statusBox.innerText = "SCANNING...";
+            statusBox.className = "text-cyan-400 animate-pulse";
+            consoleBox.innerHTML += `\n[*] Starting multi-engine search scan for: "${query}" across [${engines.join(', ')}]...`;
+
+            try {
+                const res = await fetch('/api/search/harvest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: query,
+                        max_results: limit,
+                        engines: engines
+                    })
+                });
+
+                const data = await res.json();
+                consoleBox.innerHTML += `\n[+] Search engines returned ${data.candidates_found || 0} candidate photos.`;
+                consoleBox.innerHTML += `\n[✓] SCRFD face detection & ArcFace embedding complete. Indexed ${data.newly_indexed_images || 0} portraits into FAISS.`;
+                statusBox.innerText = "COMPLETE";
+                statusBox.className = "text-emerald-400";
+                btn.disabled = false;
+                fetchStats();
+
+                // Render discovered candidate gallery
+                if (data.items && data.items.length > 0) {
+                    resultsSec.classList.remove('hidden');
+                    resultsGrid.innerHTML = '';
+                    data.items.forEach(it => {
+                        const card = document.createElement('div');
+                        card.className = "bg-[#090d16] border border-slate-800 rounded-lg p-2 space-y-1.5 flex flex-col justify-between";
+                        card.innerHTML = `
+                            <div class="h-28 w-full bg-slate-950 rounded overflow-hidden flex items-center justify-center">
+                                <img src="${it.image_url}" alt="${it.title || 'Portrait'}" class="h-full w-full object-cover" onerror="this.src='https://placehold.co/150x150/0f172a/38bdf8?text=Image';">
+                            </div>
+                            <div class="text-[10px] mono text-slate-400 truncate" title="${it.domain}">${it.domain}</div>
+                            <a href="${it.source_page}" target="_blank" class="text-[10px] mono text-cyan-400 hover:underline truncate block" title="${it.title || it.source_page}">
+                                ${it.title ? it.title.substring(0, 24) + '...' : 'View Source'}
+                            </a>
+                        `;
+                        resultsGrid.appendChild(card);
+                    });
+                }
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Error during search scan: ${e.message}`;
+                statusBox.innerText = "ERROR";
+                statusBox.className = "text-rose-400";
+                btn.disabled = false;
+            }
+        }
+
+        async function enqueueSearchHarvest() {
+            const query = document.getElementById('search-query-input').value.trim();
+            if (!query) {
+                alert("Please enter a target name or username.");
+                return;
+            }
+            const limit = parseInt(document.getElementById('search-limit').value);
+            const consoleBox = document.getElementById('search-harvest-console');
+            const statusBox = document.getElementById('search-harvest-status');
+
+            const engines = [];
+            if (document.getElementById('engine-bing').checked) engines.push('bing');
+            if (document.getElementById('engine-ddg').checked) engines.push('duckduckgo');
+
+            consoleBox.innerHTML += `\n[*] Dispatching task to Celery distributed worker queue...`;
+            try {
+                const res = await fetch('/api/queue/search-harvest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query, max_results: limit, engines: engines })
+                });
+                const data = await res.json();
+                consoleBox.innerHTML += `\n[✓] Task queued successfully! Task ID: ${data.task_id}`;
+                statusBox.innerText = "QUEUED";
+                statusBox.className = "text-purple-400";
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Failed to enqueue task: ${e.message}`;
+            }
+        }
+
+        // Zero-Knowledge Opt-Out (ZKO)
         const optoutDrop = document.getElementById('optout-drop-zone');
         const optoutFile = document.getElementById('optout-file-input');
         optoutDrop.addEventListener('click', () => optoutFile.click());

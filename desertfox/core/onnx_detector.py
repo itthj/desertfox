@@ -144,14 +144,19 @@ class SCRFDDetector(BaseDetector):
         all_scores = []
         all_landmarks = []
 
-        # SCRFD outputs: [score_8, bbox_8, kps_8, score_16, bbox_16, kps_16, score_32, bbox_32, kps_32]
-        num_strides = len(self._FEAT_STRIDE_FPN)
-        has_kps = len(outputs) == num_strides * 3
+        # SCRFD outputs can be ordered by stride or grouped by tensor type.
+        # Group dynamically by the last channel dimension:
+        score_tensors = sorted([o for o in outputs if o.shape[-1] in (1, 2)], key=lambda x: x.shape[0], reverse=True)
+        bbox_tensors = sorted([o for o in outputs if o.shape[-1] == 4], key=lambda x: x.shape[0], reverse=True)
+        kps_tensors = sorted([o for o in outputs if o.shape[-1] == 10], key=lambda x: x.shape[0], reverse=True)
 
         for idx, stride in enumerate(self._FEAT_STRIDE_FPN):
-            score_blob = outputs[idx * 3] if has_kps else outputs[idx * 2]
-            bbox_blob = outputs[idx * 3 + 1] if has_kps else outputs[idx * 2 + 1]
-            kps_blob = outputs[idx * 3 + 2] if has_kps else None
+            if idx >= len(score_tensors) or idx >= len(bbox_tensors):
+                break
+
+            score_blob = score_tensors[idx]
+            bbox_blob = bbox_tensors[idx]
+            kps_blob = kps_tensors[idx] if idx < len(kps_tensors) else None
 
             # Score processing
             if score_blob.shape[-1] == 1:

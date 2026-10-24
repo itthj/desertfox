@@ -314,6 +314,7 @@ class TestDesertFoxV2(unittest.TestCase):
 
         self.assertIn("desertfox.crawl_and_index", celery_app.tasks)
         self.assertIn("desertfox.batch_crawl_targets", celery_app.tasks)
+        self.assertIn("desertfox.search_and_index", celery_app.tasks)
         self.assertEqual(crawl_and_index_task.name, "desertfox.crawl_and_index")
         self.assertEqual(batch_crawl_targets_task.name, "desertfox.batch_crawl_targets")
 
@@ -599,6 +600,24 @@ class TestDesertFoxV2(unittest.TestCase):
             self.assertFalse(dropped["success"])
             self.assertTrue(dropped["other_face"])
             self.assertEqual([record["record_id"] for record in engine.vector_store.records], ["searcher"])
+
+    def test_search_aggregator_candidate_extraction(self):
+        """Verify SearchAggregator aggregates and deduplicates search candidate items."""
+        from desertfox.ingestion.search_aggregator import SearchAggregator
+        sa = SearchAggregator()
+        # Mocking individual engines to verify aggregation logic without live network dependency
+        sa.search_duckduckgo_images = lambda q, max_results=35: [
+            {"image_url": "https://img.example/1.jpg", "source_page_url": "https://site.example/1", "title": "Person 1", "domain": "site.example", "engine": "DuckDuckGo"},
+            {"image_url": "https://img.example/shared.jpg", "source_page_url": "https://site.example/shared", "title": "Person Shared", "domain": "site.example", "engine": "DuckDuckGo"}
+        ]
+        sa.search_bing_images = lambda q, max_results=35: [
+            {"image_url": "https://img.example/shared.jpg", "source_page_url": "https://site.example/shared", "title": "Person Shared", "domain": "site.example", "engine": "Bing"},
+            {"image_url": "https://img.example/2.jpg", "source_page_url": "https://site.example/2", "title": "Person 2", "domain": "site.example", "engine": "Bing"}
+        ]
+        results = sa.aggregate_search("test person", max_total=10)
+        self.assertEqual(len(results), 3)  # Deduplicated from 4 items
+        urls = [r["image_url"] for r in results]
+        self.assertEqual(urls.count("https://img.example/shared.jpg"), 1)
 
 if __name__ == "__main__":
     unittest.main()

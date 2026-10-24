@@ -54,6 +54,11 @@ class AuditRequest(BaseModel):
     max_pages: int = Field(30, ge=1, le=100)
     max_images: int = Field(10, ge=1, le=25)
 
+class SearchHarvestRequest(BaseModel):
+    query: str = Field(..., description="Target name, username, or identity to search across public web engines")
+    max_results: int = Field(25, ge=5, le=100)
+    engines: Optional[List[str]] = Field(default=["duckduckgo", "bing"], description="Search engines to query")
+
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
 
@@ -209,6 +214,44 @@ def get_task_status(task_id: str):
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to inspect task: {str(e)}")
+
+
+@app.post("/api/search/harvest")
+def harvest_search_query(req: SearchHarvestRequest):
+    """
+    Automated Web Search Harvester:
+    Queries public search engines for an identity/name, scrapes candidate photos from the results,
+    detects faces with SCRFD, extracts ArcFace embeddings, and indexes them into the vector database.
+    """
+    try:
+        res = engine.harvest_and_index_query(
+            query=req.query,
+            max_results=req.max_results,
+            engines=req.engines
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search harvest failed: {str(e)}")
+
+
+@app.post("/api/queue/search-harvest")
+def enqueue_search_harvest_job(req: SearchHarvestRequest):
+    """Dispatches a background web search & crawl job to the distributed Celery/Redis task queue."""
+    try:
+        from desertfox.queue.tasks import search_and_index_task
+        task = search_and_index_task.delay(
+            query=req.query,
+            max_results=req.max_results,
+            engines=req.engines
+        )
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "query": req.query,
+            "message": f"Automated search harvest job for '{req.query}' dispatched to Celery worker queue"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue search harvest task: {str(e)}")
 
 
 @app.post("/api/opt-out")

@@ -28,6 +28,7 @@ from desertfox.privacy.optout import ZeroKnowledgeOptOutRegistry
 from desertfox.privacy.enrollment import FaceEnrollment
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.async_harvester import AsyncMediaHarvester
+from desertfox.ingestion.search_aggregator import SearchAggregator
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
 from desertfox.ingestion.site_crawler import SiteCrawler
 from desertfox.config import EngineConfig
@@ -116,6 +117,7 @@ class DesertFoxEngine:
         )
         self.harvester = AdvancedHarvester()
         self.async_harvester = AsyncMediaHarvester()
+        self.search_aggregator = SearchAggregator()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
 
         # Optional FAISS High-Speed Vector Index
@@ -426,6 +428,68 @@ class DesertFoxEngine:
             "newly_indexed_images": total_indexed,
             "skipped_other_faces": skipped_other_faces,
             "pages": reports,
+        }
+
+    def harvest_and_index_query(
+        self,
+        query: str,
+        max_results: int = 30,
+        engines: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Automated OSINT search & crawl:
+        Queries search engines for an identity/name, scrapes candidate photos from the results,
+        detects faces, extracts embeddings, and indexes them into the vector database.
+        """
+        candidates = self.search_aggregator.aggregate_search(query, max_total=max_results, engines=engines)
+        indexed_count = 0
+        indexed_items = []
+
+        for idx, item in enumerate(candidates):
+            img_url = item["image_url"]
+            source_page = item["source_page_url"]
+            media = self.harvester.fetch_and_validate_media(img_url)
+            if not media:
+                continue
+
+            rec_id = f"search_{media['fingerprint']['dhash'][:8]}_{idx}"
+            meta = {
+                "source_domain": item["domain"],
+                "source_page": source_page,
+                "search_query": query,
+                "title": item["title"],
+                "engine": item["engine"],
+                "forensics": media.get("forensics", {})
+            }
+
+            res = self.process_and_index_image(
+                image=media["image"],
+                record_id=rec_id,
+                source_url=source_page,
+                metadata=meta,
+                enforce_fiqa=False
+            )
+
+            if res.get("success"):
+                indexed_count += 1
+                indexed_items.append({
+                    "record_id": rec_id,
+                    "image_url": img_url,
+                    "source_page": source_page,
+                    "title": item["title"],
+                    "domain": item["domain"]
+                })
+
+        if indexed_count > 0:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        return {
+            "status": "success",
+            "query": query,
+            "candidates_found": len(candidates),
+            "newly_indexed_images": indexed_count,
+            "items": indexed_items
         }
 
     def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:

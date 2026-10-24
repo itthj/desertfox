@@ -4,7 +4,7 @@ Celery Task Definitions for Distributed Crawling and Biometric Ingestion in Dese
 
 import os
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from desertfox.queue.celery_app import celery_app
 from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.config import EngineConfig
@@ -98,3 +98,39 @@ def batch_crawl_targets_task(self, target_urls: List[str], max_images_per_target
         "total_images_indexed": total_indexed,
         "details": results
     }
+
+
+@celery_app.task(bind=True, name="desertfox.search_and_index")
+def search_and_index_task(
+    self,
+    query: str,
+    max_results: int = 35,
+    engines: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Background worker task to aggregate public search engine results for an identity/name,
+    harvest discovered portraits, and index faces into the vector store.
+    """
+    logger.info("Starting distributed search & harvest task %s for query: %s", self.request.id, query)
+    self.update_state(state="PROGRESS", meta={"step": "searching", "query": query})
+
+    try:
+        engine = get_worker_engine()
+        result = engine.harvest_and_index_query(query=query, max_results=max_results, engines=engines)
+        logger.info("Completed search task %s: %d new faces indexed for '%s'", self.request.id, result.get("newly_indexed_images", 0), query)
+        return {
+            "task_id": self.request.id,
+            "status": "success",
+            "query": query,
+            "candidates_found": result.get("candidates_found", 0),
+            "newly_indexed_images": result.get("newly_indexed_images", 0),
+            "items": result.get("items", [])
+        }
+    except Exception as e:
+        logger.exception("Error executing search task %s: %s", self.request.id, e)
+        return {
+            "task_id": self.request.id,
+            "status": "error",
+            "query": query,
+            "error": str(e)
+        }

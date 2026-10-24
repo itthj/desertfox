@@ -10,6 +10,7 @@ Handles:
 import re
 import io
 import time
+import threading
 from typing import List, Dict, Any, Set, Optional
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -28,14 +29,27 @@ class AdvancedHarvester:
         user_agent: str = "DesertFox-OSINT-Defense-Audit/2.0 (+https://github.com/itthj/desertfox)",
         min_width: int = 64,
         min_height: int = 64,
-        request_timeout: int = 10
+        request_timeout: float = 15
     ):
         self.headers = {"User-Agent": user_agent}
         self.min_width = min_width
         self.min_height = min_height
-        self.timeout = request_timeout
+        # (connect, read): the read timeout is per socket read, so slow links need headroom
+        self.timeout = (5, request_timeout)
         self.seen_composite_hashes: Set[str] = set()
         self.last_domain_request: Dict[str, float] = {}
+        self._lock = threading.Lock()
+        # Bandwidth is the real bottleneck: skip huge originals, index-grade photos are far smaller.
+        self.max_image_bytes = 3 * 1024 * 1024
+
+    def _reserve_domain_slot(self, domain: str, min_gap: float = 0.25) -> float:
+        """Thread-safe per-domain politeness: returns how long the caller must sleep.
+        Slots are reserved under the lock but slept outside it, so different domains never block each other."""
+        with self._lock:
+            now = time.time()
+            slot = max(now, self.last_domain_request.get(domain, 0.0) + min_gap)
+            self.last_domain_request[domain] = slot
+            return max(0.0, slot - now)
 
     def extract_image_candidates_from_html(self, html_content: str, base_url: str) -> List[str]:
         """
@@ -101,14 +115,12 @@ class AdvancedHarvester:
         """
         domain = urlparse(image_url).netloc
         # Politeness rate-limit (minimum 250ms between requests to the same domain)
-        last_req = self.last_domain_request.get(domain, 0.0)
-        now = time.time()
-        if (now - last_req) < 0.25:
-            time.sleep(0.25 - (now - last_req))
-        self.last_domain_request[domain] = time.time()
+        wait = self._reserve_domain_slot(domain)
+        if wait > 0:
+            time.sleep(wait)
 
         try:
-            resp = safe_get(image_url, headers=self.headers, timeout=self.timeout, max_bytes=MAX_IMAGE_BYTES)
+            resp = safe_get(image_url, headers=self.headers, timeout=self.timeout, max_bytes=min(self.max_image_bytes, MAX_IMAGE_BYTES))
             if resp.status_code != 200:
                 return None
 
@@ -134,10 +146,10 @@ class AdvancedHarvester:
             # 1. Perceptual Hash Cascade
             fingerprint = MultiPerceptualHasher.compute_cascade_fingerprint(img)
             composite_hash = fingerprint["composite"]
-            if composite_hash in self.seen_composite_hashes:
-                return None  # Duplicate
-
-            self.seen_composite_hashes.add(composite_hash)
+            with self._lock:
+                if composite_hash in self.seen_composite_hashes:
+                    return None  # Duplicate
+                self.seen_composite_hashes.add(composite_hash)
 
             # 2. Forensic EXIF & GPS Extraction
             forensic_data = ForensicMetadataExtractor.extract_exif(img)

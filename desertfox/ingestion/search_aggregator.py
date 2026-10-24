@@ -192,6 +192,7 @@ class SearchAggregator:
                                 "title": title,
                                 "domain": self._extract_domain(page_url or img_url),
                                 "engine": "Bing",
+                                "thumb_url": self._normalize_url(obj.get("turl") or ""),
                             })
                             if len(results) >= max_results:
                                 return results
@@ -403,7 +404,7 @@ class SearchAggregator:
                 "gsrlimit": min(max_results, 50),
                 "prop": "imageinfo",
                 "iiprop": "url|extmetadata",
-                "iiurlwidth": 800,
+                "iiurlwidth": 500,
             }
             api_url = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode(params)}"
             headers = {

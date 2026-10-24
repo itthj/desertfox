@@ -13,6 +13,7 @@ Coordinates:
 
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from PIL import Image
@@ -512,6 +513,27 @@ class DesertFoxEngine:
             "pages": reports,
         }
 
+    def _parallel_fetch(self, items: List[Dict[str, Any]], workers: int = 16) -> List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
+        """Download + validate candidate images concurrently. Order of `items` is preserved.
+        Network latency dominates indexing time, so this is the main speed lever."""
+        if not items:
+            return []
+        def _one(it):
+            # Thumbnail first (small, fast, enough for a 112px face crop); original only as fallback.
+            urls = [u for u in (it.get("thumb_url"), it["image_url"]) if u]
+            for u in dict.fromkeys(urls):
+                try:
+                    media = self.harvester.fetch_and_validate_media(u)
+                except Exception:
+                    media = None
+                if media:
+                    return media
+            return None
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(items)))) as pool:
+            medias = list(pool.map(_one, items))
+        return list(zip(items, medias))
+
+
     def harvest_and_index_query(
         self,
         query: str,
@@ -527,16 +549,18 @@ class DesertFoxEngine:
         indexed_count = 0
         indexed_items = []
         engine_breakdown: Dict[str, int] = {}
-
-        for idx, item in enumerate(candidates):
+        for item in candidates:
             eng_name = item.get("engine", "Unknown")
             engine_breakdown[eng_name] = engine_breakdown.get(eng_name, 0) + 1
-            img_url = item["image_url"]
-            source_page = item["source_page_url"]
-            media = self.harvester.fetch_and_validate_media(img_url)
+
+        # Download all candidates concurrently; embedding/indexing stays serial (fast, store is not thread-safe)
+        fetched = self._parallel_fetch(candidates)
+        for idx, (item, media) in enumerate(fetched):
             if not media:
                 continue
-
+            eng_name = item.get("engine", "Unknown")
+            img_url = item["image_url"]
+            source_page = item["source_page_url"]
             rec_id = f"search_{media['fingerprint']['dhash'][:8]}_{idx}"
             meta = {
                 "source_domain": item["domain"],
@@ -546,7 +570,6 @@ class DesertFoxEngine:
                 "engine": eng_name,
                 "forensics": media.get("forensics", {})
             }
-
             res = self.process_and_index_image(
                 image=media["image"],
                 record_id=rec_id,
@@ -554,7 +577,6 @@ class DesertFoxEngine:
                 metadata=meta,
                 enforce_fiqa=False
             )
-
             if res.get("success"):
                 indexed_count += 1
                 indexed_items.append({
@@ -598,22 +620,39 @@ class DesertFoxEngine:
         dork_reports = []
         all_indexed_items = []
 
-        for d in dorks:
-            dork_str = d["dork"]
-            category = d["category"]
-            if engines is not None:
-                candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork, engines=engines)
-            else:
-                candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork)
+        def _search(d):
+            try:
+                if engines is not None:
+                    return self.search_aggregator.aggregate_search(d["dork"], max_total=max_per_dork, engines=engines)
+                return self.search_aggregator.aggregate_search(d["dork"], max_total=max_per_dork)
+            except Exception:
+                return []
+
+        # 1) run every dork search concurrently
+        with ThreadPoolExecutor(max_workers=max(1, min(6, len(dorks)))) as pool:
+            per_dork = list(pool.map(_search, dorks))
+
+        # 2) one shared concurrent download pass over all unique image URLs
+        unique, seen_urls = [], set()
+        for cands in per_dork:
+            for it in cands:
+                if it["image_url"] not in seen_urls:
+                    seen_urls.add(it["image_url"])
+                    unique.append(it)
+        media_by_url = {it["image_url"]: m for it, m in self._parallel_fetch(unique)}
+
+        # 3) serial embed + index
+        for d, candidates in zip(dorks, per_dork):
+            dork_str, category = d["dork"], d["category"]
             total_candidates += len(candidates)
             dork_indexed = 0
-
-            for idx, item in enumerate(candidates):
+            for item in candidates:
                 img_url = item["image_url"]
                 source_page = item["source_page_url"]
-                media = self.harvester.fetch_and_validate_media(img_url)
+                media = media_by_url.get(img_url)
                 if not media:
                     continue
+                media_by_url[img_url] = None  # a duplicate URL under another dork is not re-indexed
 
                 rec_id = f"dork_{category}_{media['fingerprint']['dhash'][:8]}_{len(all_indexed_items)}"
                 meta = {
@@ -626,7 +665,6 @@ class DesertFoxEngine:
                     "engine": item["engine"],
                     "forensics": media.get("forensics", {})
                 }
-
                 res = self.process_and_index_image(
                     image=media["image"],
                     record_id=rec_id,
@@ -634,11 +672,10 @@ class DesertFoxEngine:
                     metadata=meta,
                     enforce_fiqa=False
                 )
-
                 if res.get("success"):
                     dork_indexed += 1
                     total_indexed += 1
-                    indexed_info = {
+                    all_indexed_items.append({
                         "record_id": rec_id,
                         "image_url": img_url,
                         "source_page": source_page,
@@ -646,8 +683,7 @@ class DesertFoxEngine:
                         "category": category,
                         "domain": item["domain"],
                         "engine": item.get("engine", "Unknown"),
-                    }
-                    all_indexed_items.append(indexed_info)
+                    })
 
             dork_reports.append({
                 "category": category,

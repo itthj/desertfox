@@ -27,6 +27,8 @@ import io
 import ipaddress
 import os
 import socket
+import threading
+import time
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -46,6 +48,53 @@ class UnsafeURLError(ValueError):
 
 class PayloadTooLargeError(ValueError):
     """Raised when a download or upload exceeds the configured byte or pixel limit."""
+
+
+# --- Fast DNS ---------------------------------------------------------------
+# Crawling touches hundreds of distinct hosts. Some resolvers (home routers,
+# captive DNS) never answer AAAA queries, so a dual-stack getaddrinfo() stalls
+# 5 s per lookup, and every URL is resolved twice (validation + connect).
+# This wrapper (a) resolves IPv4 first and only falls back to IPv6 if that fails,
+# and (b) caches answers for a short TTL, so validation and connect agree and
+# repeat hosts cost nothing. Disable with DESERTFOX_FAST_DNS=0.
+_DNS_TTL_SEC = 300
+_DNS_CACHE_MAX = 4096
+_dns_cache: Dict[tuple, Tuple[float, list]] = {}
+_dns_lock = threading.Lock()
+_real_getaddrinfo = socket.getaddrinfo
+
+
+def _fast_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if not isinstance(host, str) or not host:
+        return _real_getaddrinfo(host, port, family, type, proto, flags)
+    key = (host.lower(), port, family, type, proto, flags)
+    now = time.time()
+    with _dns_lock:
+        hit = _dns_cache.get(key)
+        if hit and now - hit[0] < _DNS_TTL_SEC:
+            return list(hit[1])
+    if family in (0, socket.AF_UNSPEC):
+        try:
+            result = _real_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+        except socket.gaierror:
+            result = _real_getaddrinfo(host, port, family, type, proto, flags)
+    else:
+        result = _real_getaddrinfo(host, port, family, type, proto, flags)
+    with _dns_lock:
+        if len(_dns_cache) >= _DNS_CACHE_MAX:
+            _dns_cache.clear()
+        _dns_cache[key] = (now, list(result))
+    return result
+
+
+def install_fast_dns() -> None:
+    if os.environ.get("DESERTFOX_FAST_DNS", "1").strip().lower() in {"0", "false", "no"}:
+        return
+    if socket.getaddrinfo is not _fast_getaddrinfo:
+        socket.getaddrinfo = _fast_getaddrinfo
+
+
+install_fast_dns()
 
 
 def _private_urls_allowed() -> bool:

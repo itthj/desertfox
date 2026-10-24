@@ -153,6 +153,7 @@ def _reject_unsafe(exc: Exception) -> HTTPException:
 @app.get("/api/stats")
 def get_stats():
     """Returns real-time engine telemetry."""
+    lock_enabled = bool(getattr(engine.config, "enforce_single_face_lock", False))
     return {
         "status": "online",
         "engine_version": "1.0.0",
@@ -160,8 +161,20 @@ def get_stats():
         "embedding_dimensions": engine.embedder.embedding_dim,
         "optout_exclusions_count": len(engine.optout_registry.blacklisted_hashes),
         "vector_store_path": engine.vector_store_path,
-        "face_enrolled": engine.enrollment.enrolled,
-        "enrollment_mode": engine.enrollment.mode,
+        "single_face_lock_enabled": lock_enabled,
+        "face_enrolled": engine.enrollment.enrolled if lock_enabled else False,
+        "enrollment_mode": engine.enrollment.mode if lock_enabled else "multi-face-production",
+    }
+
+
+@app.post("/api/enrollment/reset")
+def reset_enrollment_lock():
+    """Clears any stored single-face enrollment file and confirms lock state."""
+    engine.enrollment.reset()
+    return {
+        "status": "reset",
+        "single_face_lock_enabled": bool(getattr(engine.config, "enforce_single_face_lock", False)),
+        "message": "Enrollment state cleared. Multi-face production mode is active.",
     }
 
 

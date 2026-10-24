@@ -18,7 +18,11 @@ class EngineConfig(BaseModel):
     # Embedding settings
     embedding_dimension: int = Field(default=512, description="Embedding vector size (ArcFace 512-d)")
     similarity_threshold: float = Field(default=0.68, description="Cosine similarity cutoff for identity match")
-    enrollment_match_threshold: float = Field(default=0.55, description="Minimum cosine similarity to the one enrolled face")
+    enforce_single_face_lock: bool = Field(
+        default=os.environ.get("DESERTFOX_SINGLE_FACE_LOCK", "0").lower() in ("1", "true", "yes"),
+        description="When False (default production mode), suspends the single-face lock so multiple identities can be searched freely",
+    )
+    enrollment_match_threshold: float = Field(default=0.55, description="Minimum cosine similarity to the one enrolled face when lock is enabled")
     enrollment_path: str = Field(default="./data/enrolled_face.npy", description="Path of the single enrolled identity")
 
     # Storage

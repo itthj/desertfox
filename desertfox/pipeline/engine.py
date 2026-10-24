@@ -369,7 +369,18 @@ class DesertFoxEngine:
         return vector
 
     def authorize_probe(self, probe_image: Image.Image, file_sha256: str) -> Dict[str, Any]:
-        """Enroll the first face. Reject a later probe of a different person."""
+        """
+        When enforce_single_face_lock is False (default production mode), allows any face probe.
+        When True, enrolls the first face and rejects later probes of a different person.
+        """
+        if not getattr(self.config, "enforce_single_face_lock", False):
+            return {
+                "allowed": True,
+                "created": False,
+                "similarity": 1.0,
+                "mode": "multi-face-production",
+                "message": "",
+            }
         _bbox, vector = self.embed_probe(probe_image)
         return self.enrollment.authorize(
             vector,
@@ -435,12 +446,15 @@ class DesertFoxEngine:
 
     def audit_site(self, seed_url: str, max_pages: Optional[int] = None, max_images: int = 10) -> Dict[str, Any]:
         """
-        Walk one named host and store only images of the enrolled face.
-        Other faces are compared in memory and discarded. robots.txt and the page cap still apply.
+        Walk one named host and index discovered faces.
+        When enforce_single_face_lock is True, stores only images of the enrolled face.
+        When False (production mode), indexes all valid faces discovered on the host.
         """
-        blocked = self._searcher_only_block()
-        if blocked:
-            return {"status": "error", "message": blocked, "newly_indexed_images": 0, "pages": [], "skipped_other_faces": 0}
+        enforce_lock = bool(getattr(self.config, "enforce_single_face_lock", False))
+        if enforce_lock:
+            blocked = self._searcher_only_block()
+            if blocked:
+                return {"status": "error", "message": blocked, "newly_indexed_images": 0, "pages": [], "skipped_other_faces": 0}
 
         page_cap = max_pages if max_pages is not None else self.config.audit_max_pages
         page_cap = max(1, min(int(page_cap), 100))
@@ -467,7 +481,7 @@ class DesertFoxEngine:
                     max_images=image_cap,
                     use_async=False,
                     persist=False,
-                    only_enrolled=True,
+                    only_enrolled=enforce_lock,
                 )
             except Exception as exc:
                 reports.append({"url": page, "status": "error", "indexed": 0, "error": str(exc)})

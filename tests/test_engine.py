@@ -520,8 +520,10 @@ class TestDesertFoxV2(unittest.TestCase):
 
         previous = server.engine.enrollment
         prev_identity = getattr(server.engine.embedder, "verifies_identity", False)
+        prev_lock = server.engine.config.enforce_single_face_lock
         try:
             server.engine.embedder.verifies_identity = False
+            server.engine.config.enforce_single_face_lock = True
             with tempfile.TemporaryDirectory() as tmpdir:
                 server.engine.enrollment = FaceEnrollment(os.path.join(tmpdir, "face.npy"), match_threshold=0.55)
                 client = TestClient(server.app)
@@ -540,14 +542,44 @@ class TestDesertFoxV2(unittest.TestCase):
         finally:
             server.engine.enrollment = previous
             server.engine.embedder.verifies_identity = prev_identity
+            server.engine.config.enforce_single_face_lock = prev_lock
+
+    def test_multi_face_production_mode_unrestricted(self):
+        """By default (enforce_single_face_lock=False), multiple different faces can be searched repeatedly without lock rejection."""
+        import base64
+        import io
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+
+        def png(color):
+            image = Image.new("RGB", (80, 80), color)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            encoded = base64.b64encode(buffer.getvalue()).decode()
+            return f"data:image/png;base64,{encoded}"
+
+        self.assertFalse(server.engine.config.enforce_single_face_lock)
+        client = TestClient(server.app)
+        r1 = client.post("/api/search", json={"image_base64": png((15, 25, 35)), "threshold": 0.5, "top_k": 3})
+        r2 = client.post("/api/search", json={"image_base64": png((220, 40, 90)), "threshold": 0.5, "top_k": 3})
+        r3 = client.post("/api/search", json={"image_base64": png((50, 210, 120)), "threshold": 0.5, "top_k": 3})
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r3.status_code, 200)
+        self.assertEqual(r1.json()["enrollment"]["mode"], "multi-face-production")
+        self.assertEqual(r2.json()["enrollment"]["mode"], "multi-face-production")
 
     def test_audit_refuses_to_run_without_an_enrolled_face(self):
-        """A searcher-only audit does not fetch a site until the enrolled face can be filtered."""
+        """When enforce_single_face_lock=True, a searcher-only audit does not fetch a site until the enrolled face can be filtered."""
         import tempfile
         from desertfox.config import EngineConfig
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "empty.index"), use_faiss=False)
+            cfg = EngineConfig(
+                vector_store_path=os.path.join(tmpdir, "empty.index"),
+                use_faiss=False,
+                enforce_single_face_lock=True,
+            )
             engine = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
             result = engine.audit_site("https://example.com", max_pages=5)
             self.assertEqual(result["status"], "error")

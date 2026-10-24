@@ -41,6 +41,11 @@ class SearchRequest(BaseModel):
     threshold: float = Field(0.60, ge=0.1, le=1.0)
     top_k: int = Field(10, ge=1, le=50)
 
+class MultiProbeSearchRequest(BaseModel):
+    images_base64: List[str] = Field(..., min_length=1, max_length=5, description="1 to 5 base64 encoded probe face images")
+    threshold: float = Field(0.55, ge=0.1, le=1.0)
+    top_k: int = Field(15, ge=1, le=50)
+
 class IndexImageRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to index")
     record_id: str
@@ -149,6 +154,43 @@ def search_probe(req: SearchRequest):
         raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
+
+
+@app.post("/api/search/multi-probe")
+def search_multi_probe(req: MultiProbeSearchRequest):
+    """
+    Multi-photo biometric probe search:
+    Aggregates 1 to 5 probe images of the enrolled person across different angles/lighting,
+    performs 5-point landmark similarity transform alignment, estimates head poses,
+    fuses embeddings into a composite prototype vector, and searches FAISS.
+    """
+    try:
+        decoded_images = []
+        for idx, b64 in enumerate(req.images_base64):
+            img, digest = decode_base64_payload(b64)
+            # Authorize first image to lock identity or verify matching
+            gate = engine.authorize_probe(img, digest)
+            if not gate["allowed"]:
+                raise HTTPException(status_code=403, detail={
+                    "status": "rejected",
+                    "message": f"Probe image {idx+1} does not match enrolled identity.",
+                    "similarity": gate.get("similarity"),
+                    "mode": gate.get("mode")
+                })
+            decoded_images.append(img)
+
+        results = engine.search_multi_probe_images(
+            probe_images=decoded_images,
+            top_k=req.top_k,
+            threshold=req.threshold
+        )
+        return results
+    except HTTPException:
+        raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Multi-probe search failed: {str(e)}")
 
 
 @app.post("/api/index/image")

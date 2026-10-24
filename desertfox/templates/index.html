@@ -158,10 +158,19 @@
                                 <div class="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-emerald-400 group-hover:bg-slate-700/80 transition-all">
                                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                 </div>
-                                <div class="text-sm font-medium text-slate-300">Drag & Drop facial portrait or <span class="text-emerald-400 underline">Browse</span></div>
-                                <p class="text-xs text-slate-400">Supports JPG, PNG, WEBP (Selfie / ID / Headshot)</p>
+                                <div class="text-sm font-medium text-slate-300">Drag & Drop 1-4 facial angles or <span class="text-emerald-400 underline">Browse</span></div>
+                                <p class="text-xs text-slate-400">Multi-photo fusion: Selfie, ID, profile angle, expressions</p>
                             </div>
-                            <input type="file" id="file-input" accept="image/*" class="hidden">
+                            <input type="file" id="file-input" accept="image/*" multiple class="hidden">
+                        </div>
+
+                        <!-- Multi-Photo Probe Gallery Strip & Alignment Status -->
+                        <div id="multi-probe-container" class="hidden space-y-2 pt-1">
+                            <div class="flex items-center justify-between text-[11px] mono">
+                                <span class="text-slate-400">PROBE ANGLE ENSEMBLE (<span id="probe-count-badge" class="text-emerald-400">1</span>/4)</span>
+                                <span class="text-[10px] text-cyan-400 px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-800">5-PT ALIGNMENT ON</span>
+                            </div>
+                            <div id="multi-probe-strip" class="grid grid-cols-4 gap-2"></div>
                         </div>
 
                         <!-- Sensitivity & Search Controls -->
@@ -825,33 +834,83 @@
         const probeImg = document.getElementById('probe-img');
         const faceReticle = document.getElementById('face-reticle');
         const laserSweep = document.getElementById('laser-sweep');
+        const multiProbeContainer = document.getElementById('multi-probe-container');
+        const multiProbeStrip = document.getElementById('multi-probe-strip');
+        const probeCountBadge = document.getElementById('probe-count-badge');
 
-        dropZone.addEventListener('click', () => fileInput.click());
+        let currentProbes = [];
+
+        dropZone.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            fileInput.click();
+        });
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-emerald-500'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-emerald-500'));
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
             dropZone.classList.remove('border-emerald-500');
-            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
         });
         fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length) handleFile(e.target.files[0]);
+            if (e.target.files.length) handleFiles(e.target.files);
         });
 
-        function handleFile(file) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                currentProbeBase64 = e.target.result;
-                probeImg.src = currentProbeBase64;
-                uploadPrompt.classList.add('hidden');
-                previewWrapper.classList.remove('hidden');
-                faceReticle.classList.remove('hidden');
-                faceReticle.style.width = '55%';
-                faceReticle.style.height = '65%';
-                faceReticle.style.top = '15%';
-                faceReticle.style.left = '22%';
-            };
-            reader.readAsDataURL(file);
+        function handleFiles(fileList) {
+            const files = Array.from(fileList).slice(0, 4 - currentProbes.length);
+            if (!files.length) return;
+
+            files.forEach((file) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    currentProbes.push({
+                        base64: e.target.result,
+                        name: file.name
+                    });
+                    updateProbeGallery();
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function removeProbe(idx, ev) {
+            if (ev) ev.stopPropagation();
+            currentProbes.splice(idx, 1);
+            updateProbeGallery();
+        }
+
+        function updateProbeGallery() {
+            if (currentProbes.length === 0) {
+                currentProbeBase64 = null;
+                uploadPrompt.classList.remove('hidden');
+                previewWrapper.classList.add('hidden');
+                faceReticle.classList.add('hidden');
+                multiProbeContainer.classList.add('hidden');
+                multiProbeStrip.innerHTML = '';
+                return;
+            }
+
+            currentProbeBase64 = currentProbes[0].base64;
+            probeImg.src = currentProbeBase64;
+            uploadPrompt.classList.add('hidden');
+            previewWrapper.classList.remove('hidden');
+            faceReticle.classList.remove('hidden');
+            faceReticle.style.width = '55%';
+            faceReticle.style.height = '65%';
+            faceReticle.style.top = '15%';
+            faceReticle.style.left = '22%';
+
+            multiProbeContainer.classList.remove('hidden');
+            probeCountBadge.innerText = currentProbes.length;
+
+            multiProbeStrip.innerHTML = currentProbes.map((p, idx) => `
+                <div class="relative bg-slate-900 border border-slate-700 rounded-lg p-1 group flex flex-col items-center">
+                    <img src="${p.base64}" class="w-full h-16 object-cover rounded" alt="Probe angle ${idx+1}">
+                    <span class="text-[9px] mono text-slate-400 mt-1">${idx === 0 ? 'Primary' : `Angle #${idx+1}`}</span>
+                    <button onclick="removeProbe(${idx}, event)" class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center text-[10px] leading-none transition-all shadow">
+                        ✕
+                    </button>
+                </div>
+            `).join('');
         }
 
         const slider = document.getElementById('threshold-slider');
@@ -861,8 +920,8 @@
         });
 
         async function executeSearch() {
-            if (!currentProbeBase64) {
-                alert('Please select or drop a face photo first.');
+            if (currentProbes.length === 0) {
+                alert('Please select or drop at least one facial portrait photo.');
                 return;
             }
 
@@ -872,17 +931,31 @@
 
             try {
                 const threshold = parseFloat(slider.value);
-                const res = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        image_base64: currentProbeBase64,
-                        threshold: threshold,
-                        top_k: 10
-                    })
-                });
+                let res, data;
 
-                const data = await res.json();
+                if (currentProbes.length === 1) {
+                    res = await fetch('/api/search', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            image_base64: currentProbes[0].base64,
+                            threshold: threshold,
+                            top_k: 15
+                        })
+                    });
+                } else {
+                    res = await fetch('/api/search/multi-probe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            images_base64: currentProbes.map(p => p.base64),
+                            threshold: threshold,
+                            top_k: 15
+                        })
+                    });
+                }
+
+                data = await res.json();
                 if (!res.ok) {
                     const detail = data.detail || {};
                     const message = typeof detail === 'string' ? detail : (detail.message || 'Search rejected');
@@ -932,7 +1005,11 @@
             }
 
             const matches = data.matches || [];
-            counter.innerHTML = `MATCHES: <span class="text-emerald-400 font-bold">${matches.length}</span>`;
+            if (data.probes_count && data.probes_count > 1) {
+                counter.innerHTML = `MATCHES: <span class="text-emerald-400 font-bold">${matches.length}</span> <span class="text-[10px] text-cyan-400 px-1 py-0.5 rounded bg-cyan-950 border border-cyan-800 ml-1.5">${data.probes_count}-ANGLE FUSION</span>`;
+            } else {
+                counter.innerHTML = `MATCHES: <span class="text-emerald-400 font-bold">${matches.length}</span>`;
+            }
 
             if (matches.length === 0) {
                 emptyState.innerHTML = `

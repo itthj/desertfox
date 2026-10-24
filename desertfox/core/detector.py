@@ -27,7 +27,17 @@ class BaseDetector:
         raise NotImplementedError
 
     def crop_and_align(self, image: Image.Image, face: DetectedFace, target_size: Tuple[int, int] = (112, 112)) -> Image.Image:
-        """Crops and aligns face into standardized dimensions."""
+        """
+        Crops and aligns face into standardized dimensions.
+        Uses 5-point similarity transform alignment if facial landmarks are present.
+        """
+        if face.landmarks is not None:
+            try:
+                from desertfox.core.alignment import FaceAligner
+                return FaceAligner.align_face(image, face.landmarks, target_size=target_size)
+            except Exception:
+                pass
+
         x1, y1, x2, y2 = face.bbox
         # Add slight margin
         width = x2 - x1

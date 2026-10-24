@@ -19,6 +19,8 @@ from PIL import Image
 
 from desertfox.core.embedder import BaseEmbedder, VisualFeatureEmbedder
 from desertfox.core.detector import BaseDetector, AdaptiveFaceDetector
+from desertfox.core.alignment import FaceAligner
+from desertfox.core.probe_fusion import MultiProbeFusion
 from desertfox.core.fiqa import FaceQualityAssessment
 from desertfox.core.hashing import MultiPerceptualHasher
 from desertfox.core.bktree import BKTree
@@ -245,30 +247,92 @@ class DesertFoxEngine:
     ) -> Dict[str, Any]:
         """
         Audits an identity photo against all indexed public images.
-        Returns FIQA quality telemetry, detected landmarks, and ranked candidate matches.
+        Uses 5-point facial landmark alignment and returns FIQA & pose telemetry.
         """
-        # Run FIQA on input probe
-        probe_fiqa = FaceQualityAssessment.evaluate_quality(probe_image)
-        detected_bbox, probe_vector = self.embed_probe(probe_image)
+        res = self.search_multi_probe_images([probe_image], top_k=top_k, threshold=threshold)
+        if res.get("status") == "excluded":
+            return res
+        probe_meta = res["probe_telemetry"][0] if res.get("probe_telemetry") else {}
+        return {
+            "status": "success",
+            "probe_telemetry": {
+                "detected_face_bbox": probe_meta.get("bbox", (0, 0, probe_image.width, probe_image.height)),
+                "vector_dimension": self.embedder.embedding_dim,
+                "aligned_resolution": "112x112",
+                "fiqa": probe_meta.get("fiqa", {}),
+                "pose": probe_meta.get("pose", {})
+            },
+            "total_matches": res["total_matches"],
+            "matches": res["matches"]
+        }
+
+    def search_multi_probe_images(
+        self,
+        probe_images: List[Image.Image],
+        top_k: int = 10,
+        threshold: float = 0.55
+    ) -> Dict[str, Any]:
+        """
+        Multi-angle probe search & biometric fusion:
+        Extracts 5-point aligned crops across 1 to N probe images,
+        estimates head pose and FIQA quality, checks multi-photo consistency,
+        computes an ensemble composite embedding, and executes rank-fused retrieval.
+        """
+        fusion_res = MultiProbeFusion.process_probes(
+            probe_images=probe_images,
+            detector=self.detector,
+            embedder=self.embedder
+        )
+
+        composite_vector = fusion_res["composite_vector"]
+        indiv_vectors = fusion_res["individual_vectors"]
 
         # Check opt-out registry
-        if self.optout_registry.is_excluded(probe_vector):
+        if self.optout_registry.is_excluded(composite_vector):
             return {
                 "status": "excluded",
                 "message": "This biometric profile has been opted out of indexing and search.",
                 "matches": []
             }
 
-        matches = self._decorate_matches(self._query(probe_vector, top_k=top_k, threshold=threshold))
+        # Query candidates
+        if len(indiv_vectors) <= 1:
+            matches = self._decorate_matches(self._query(composite_vector, top_k=top_k, threshold=threshold))
+        else:
+            comp_matches = {m.record_id: m for m in self._query(composite_vector, top_k=top_k * 2, threshold=max(threshold - 0.15, 0.20))}
+            all_candidate_ids = set(comp_matches.keys())
+            indiv_match_maps = []
+            for v in indiv_vectors:
+                sub_matches = {m.record_id: m for m in self._query(v, top_k=top_k * 2, threshold=max(threshold - 0.15, 0.20))}
+                all_candidate_ids.update(sub_matches.keys())
+                indiv_match_maps.append(sub_matches)
+
+            rescored = []
+            for rec_id in all_candidate_ids:
+                base_match = comp_matches.get(rec_id)
+                if not base_match:
+                    for imap in indiv_match_maps:
+                        if rec_id in imap:
+                            base_match = imap[rec_id]
+                            break
+
+                sim_comp = comp_matches[rec_id].similarity if rec_id in comp_matches else 0.0
+                sim_max_indiv = max((imap[rec_id].similarity for imap in indiv_match_maps if rec_id in imap), default=0.0)
+                fused_sim = round(0.50 * sim_comp + 0.50 * sim_max_indiv, 4)
+
+                if fused_sim >= threshold and base_match is not None:
+                    base_match.similarity = fused_sim
+                    rescored.append(base_match)
+
+            rescored.sort(key=lambda x: x.similarity, reverse=True)
+            matches = self._decorate_matches(rescored[:top_k])
 
         return {
             "status": "success",
-            "probe_telemetry": {
-                "detected_face_bbox": detected_bbox,
-                "vector_dimension": self.embedder.embedding_dim,
-                "aligned_resolution": "112x112",
-                "fiqa": probe_fiqa
-            },
+            "probes_count": len(probe_images),
+            "is_consistent": fusion_res["is_consistent"],
+            "avg_consistency": fusion_res["avg_consistency"],
+            "probe_telemetry": fusion_res["probe_details"],
             "total_matches": len(matches),
             "matches": matches
         }

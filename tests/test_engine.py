@@ -791,5 +791,79 @@ class TestDesertFoxV2(unittest.TestCase):
         opt_res = tasks.optimize_and_compact_index.apply()
         self.assertEqual(opt_res.result["status"], "success")
 
+    def test_face_aligner_and_pose(self):
+        """Verify FaceAligner similarity transform, image warp, and head pose estimation."""
+        from desertfox.core.alignment import FaceAligner, ARCFACE_REFERENCE_112
+        from desertfox.core.detector import FaceLandmarks
+
+        # Reference shape
+        ref = FaceAligner.get_reference_landmarks((112, 112))
+        self.assertEqual(ref.shape, (5, 2))
+
+        # Check pose on canonical landmarks
+        lm = FaceLandmarks(
+            left_eye=tuple(ARCFACE_REFERENCE_112[0]),
+            right_eye=tuple(ARCFACE_REFERENCE_112[1]),
+            nose=tuple(ARCFACE_REFERENCE_112[2]),
+            left_mouth=tuple(ARCFACE_REFERENCE_112[3]),
+            right_mouth=tuple(ARCFACE_REFERENCE_112[4])
+        )
+        pose = FaceAligner.estimate_head_pose(lm)
+        self.assertTrue(pose["is_frontal"])
+        self.assertAlmostEqual(pose["roll"], 0.0, delta=2.0)
+
+        # Test alignment execution on image
+        img = Image.new("RGB", (200, 200), color=(100, 150, 200))
+        aligned = FaceAligner.align_face(img, lm, target_size=(112, 112))
+        self.assertEqual(aligned.size, (112, 112))
+
+    def test_multi_probe_fusion_and_api(self):
+        """Verify MultiProbeFusion ensemble aggregation, consistency, and API endpoint."""
+        import base64
+        import io
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.core.probe_fusion import MultiProbeFusion
+
+        img1 = Image.new("RGB", (100, 100), color=(120, 140, 160))
+        img2 = Image.new("RGB", (100, 100), color=(125, 145, 165))
+
+        fusion = MultiProbeFusion.process_probes([img1, img2], self.detector, self.embedder)
+        self.assertEqual(fusion["num_probes"], 2)
+        self.assertEqual(len(fusion["composite_vector"]), self.embedder.embedding_dim)
+        self.assertAlmostEqual(float(np.linalg.norm(fusion["composite_vector"])), 1.0, places=4)
+        self.assertTrue(fusion["is_consistent"])
+
+        # Test score aggregation
+        cand = np.ones(self.embedder.embedding_dim, dtype=np.float32)
+        score = MultiProbeFusion.aggregate_match_scores(cand, fusion["composite_vector"], fusion["individual_vectors"])
+        self.assertIsInstance(score, float)
+
+        # Test multi-probe search via API
+        def to_b64(image):
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+
+        import tempfile
+        prev_identity = getattr(server.engine.embedder, "verifies_identity", False)
+        prev_enrollment = server.engine.enrollment
+        server.engine.embedder.verifies_identity = False
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from desertfox.privacy.enrollment import FaceEnrollment
+            server.engine.enrollment = FaceEnrollment(os.path.join(tmpdir, "probe_enroll.npy"))
+            try:
+                client = TestClient(server.app)
+                res = client.post("/api/search/multi-probe", json={
+                    "images_base64": [to_b64(img1)],
+                    "threshold": 0.5,
+                    "top_k": 5
+                })
+                self.assertEqual(res.status_code, 200)
+                self.assertIn("matches", res.json())
+            finally:
+                server.engine.enrollment = prev_enrollment
+                server.engine.embedder.verifies_identity = prev_identity
+
 if __name__ == "__main__":
     unittest.main()

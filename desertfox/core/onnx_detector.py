@@ -275,51 +275,5 @@ class SCRFDDetector(BaseDetector):
         if face.landmarks is None:
             return super().crop_and_align(image, face, target_size)
 
-        try:
-            import cv2
-            return self._align_with_cv2(image, face, target_size)
-        except ImportError:
-            # Fallback to basic crop+resize if OpenCV not available
-            return super().crop_and_align(image, face, target_size)
-
-    def _align_with_cv2(
-        self,
-        image: Image.Image,
-        face: DetectedFace,
-        target_size: Tuple[int, int]
-    ) -> Image.Image:
-        """ArcFace-standard 5-point similarity transform alignment via OpenCV."""
-        import cv2
-
-        # ArcFace canonical landmark reference for 112x112
-        arcface_ref = np.array([
-            [38.2946, 51.6963],   # left eye
-            [73.5318, 51.5014],   # right eye
-            [56.0252, 71.7366],   # nose
-            [41.5493, 92.3655],   # left mouth
-            [70.7299, 92.2041],   # right mouth
-        ], dtype=np.float32)
-
-        # Scale reference landmarks to target size
-        scale_x = target_size[0] / 112.0
-        scale_y = target_size[1] / 112.0
-        arcface_ref[:, 0] *= scale_x
-        arcface_ref[:, 1] *= scale_y
-
-        lm = face.landmarks
-        src_pts = np.array([
-            list(lm.left_eye),
-            list(lm.right_eye),
-            list(lm.nose),
-            list(lm.left_mouth),
-            list(lm.right_mouth),
-        ], dtype=np.float32)
-
-        # Estimate similarity transform (rigid + uniform scale)
-        M = cv2.estimateAffinePartial2D(src_pts, arcface_ref)[0]
-        if M is None:
-            return super().crop_and_align(image, face, target_size)
-
-        img_arr = np.array(image.convert("RGB"))
-        aligned = cv2.warpAffine(img_arr, M, target_size, borderValue=(0, 0, 0))
-        return Image.fromarray(aligned)
+        from desertfox.core.alignment import FaceAligner
+        return FaceAligner.align_face(image, face.landmarks, target_size=target_size)

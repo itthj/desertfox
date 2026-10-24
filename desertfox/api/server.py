@@ -4,6 +4,7 @@ Serves REST API and responsive Cyber-OSINT HUD Web Interface.
 """
 
 import os
+import base64
 from typing import Dict, Any, List, Optional
 
 from desertfox.privacy.enrollment import sha256_bytes
@@ -103,6 +104,39 @@ class TakedownRequest(BaseModel):
     subject_email: str
     notes: Optional[str] = ""
 
+class VideoProbeSearchRequest(BaseModel):
+    video_base64: str = Field(..., description="Base64 encoded probe video clip (MP4/WebM/MOV)")
+    threshold: float = Field(0.55, ge=0.1, le=1.0)
+    top_k: int = Field(15, ge=1, le=50)
+    max_probe_frames: int = Field(4, ge=1, le=6)
+
+class VideoUrlIndexRequest(BaseModel):
+    video_url: str = Field(..., description="YouTube, Vimeo, or direct .mp4/.webm video URL")
+    sample_interval_sec: float = Field(2.0, ge=0.5, le=30.0)
+    max_frames: int = Field(20, ge=1, le=60)
+
+class VideoUploadIndexRequest(BaseModel):
+    video_base64: str = Field(..., description="Base64 encoded video file to extract frames and index")
+    title: str = Field("Uploaded Video Clip", description="Descriptive title for the video")
+    source_url: str = Field("uploaded://video.mp4", description="Source reference URL")
+    sample_interval_sec: float = Field(1.5, ge=0.5, le=30.0)
+    max_frames: int = Field(20, ge=1, le=60)
+
+class VideoSearchHarvestRequest(BaseModel):
+    query: str = Field(..., description="Target name or handle to search across public video platforms")
+    max_videos: int = Field(8, ge=1, le=25)
+
+
+def decode_base64_video_bytes(b64_str: str, max_bytes: int = 40 * 1024 * 1024) -> bytes:
+    """Decodes a base64 or data-URI video payload with strict size bounds."""
+    if not b64_str:
+        raise ValueError("Empty video payload")
+    payload = b64_str.split(",", 1)[1] if "," in b64_str else b64_str
+    raw = base64.b64decode(payload)
+    if len(raw) > max_bytes:
+        raise PayloadTooLargeError(f"Video payload exceeds {max_bytes // (1024 * 1024)} MB limit")
+    return raw
+
 def decode_base64_payload(b64_str: str):
     """Return the PIL image and the SHA-256 of the uploaded bytes (size- and pixel-bounded)."""
     image, raw = _decode_bounded(b64_str)
@@ -198,6 +232,145 @@ def search_multi_probe(req: MultiProbeSearchRequest):
         raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Multi-probe search failed: {str(e)}")
+
+
+@app.post("/api/search/video-probe")
+def search_video_probe(req: VideoProbeSearchRequest):
+    """
+    Video Probe Biometric Search:
+    Accepts an uploaded video clip of the user (e.g. a selfie video), automatically
+    extracts the sharpest pose-diverse face frames across the video timeline,
+    verifies identity against the enrollment lock, fuses embeddings via MultiProbeFusion,
+    and searches the FAISS vector database.
+    """
+    try:
+        video_bytes = decode_base64_video_bytes(req.video_base64)
+        from desertfox.ingestion.video_harvester import VideoFrameHarvester
+        best_frames = VideoFrameHarvester.extract_best_probe_frames(
+            video_bytes=video_bytes,
+            detector=engine.detector,
+            max_probes=req.max_probe_frames,
+        )
+        if not best_frames:
+            raise HTTPException(status_code=400, detail="Could not extract any valid frames from uploaded video.")
+
+        # Authorize the primary extracted face frame against the enrollment lock
+        primary_img = best_frames[0]["image"]
+        digest = sha256_bytes(video_bytes)
+        gate = engine.authorize_probe(primary_img, digest)
+        if not gate["allowed"]:
+            raise HTTPException(status_code=403, detail={
+                "status": "rejected",
+                "message": gate.get("message") or "Video probe face does not match enrolled identity.",
+                "similarity": gate.get("similarity"),
+                "mode": gate.get("mode"),
+            })
+
+        results = engine.search_multi_probe_images(
+            probe_images=[f["image"] for f in best_frames],
+            top_k=req.top_k,
+            threshold=req.threshold,
+        )
+        results["video_probe_frames"] = [
+            {
+                "frame_index": f["frame_index"],
+                "timestamp_sec": f["timestamp_sec"],
+                "timestamp_hms": f["timestamp_hms"],
+                "quality_score": f["score"],
+                "has_face": f["has_face"],
+            }
+            for f in best_frames
+        ]
+        return results
+    except HTTPException:
+        raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Video probe search failed: {str(e)}")
+
+
+@app.post("/api/video/index-url")
+def index_video_from_url(req: VideoUrlIndexRequest):
+    """
+    Extracts keyframes across a YouTube, Vimeo, or direct .mp4/.webm video URL,
+    detects all faces per frame with SCRFD, extracts 512-d ArcFace embeddings,
+    and indexes each appearance with exact timestamp deep links.
+    """
+    try:
+        res = engine.crawl_and_index_video_url(
+            video_url=req.video_url,
+            sample_interval_sec=req.sample_interval_sec,
+            max_frames=req.max_frames,
+        )
+        if res.get("status") == "error":
+            raise HTTPException(status_code=400, detail=res.get("message", "Video URL indexing failed"))
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video URL indexing failed: {str(e)}")
+
+
+@app.post("/api/video/index-upload")
+def index_uploaded_video(req: VideoUploadIndexRequest):
+    """
+    Decodes an uploaded video file (MP4/WebM/MOV), extracts timeline frames,
+    detects all faces across timestamps, and indexes them into FAISS.
+    """
+    try:
+        video_bytes = decode_base64_video_bytes(req.video_base64)
+        res = engine.index_video_bytes(
+            video_bytes=video_bytes,
+            source_url=req.source_url,
+            title=req.title,
+            sample_interval_sec=req.sample_interval_sec,
+            max_frames=req.max_frames,
+        )
+        if res.get("status") == "error":
+            raise HTTPException(status_code=400, detail=res.get("message", "Video upload indexing failed"))
+        return res
+    except HTTPException:
+        raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Video upload indexing failed: {str(e)}")
+
+
+@app.post("/api/video/search-harvest")
+def harvest_video_search_query(req: VideoSearchHarvestRequest):
+    """
+    Searches public video platforms (YouTube, Bing Videos) for a target identity/name,
+    extracts temporal keyframes across discovered videos, and indexes all detected faces
+    with jump-to-timestamp deep links.
+    """
+    try:
+        return engine.harvest_and_index_video_query(
+            query=req.query,
+            max_videos=req.max_videos,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video search harvest failed: {str(e)}")
+
+
+@app.post("/api/queue/video-harvest")
+def enqueue_video_harvest_job(req: VideoSearchHarvestRequest):
+    """Dispatches a background video search & keyframe harvest job to Celery."""
+    try:
+        from desertfox.queue.tasks import video_harvest_and_index_task
+        task = video_harvest_and_index_task.delay(
+            query=req.query,
+            max_videos=req.max_videos,
+        )
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "query": req.query,
+            "message": f"Video keyframe harvest job for '{req.query}' dispatched to Celery worker queue",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue video harvest task: {str(e)}")
 
 
 @app.post("/api/index/image")

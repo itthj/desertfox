@@ -306,3 +306,32 @@ def optimize_and_compact_index(self) -> Dict[str, Any]:
             "status": "error",
             "error": str(e)
         }
+
+
+@celery_app.task(bind=True, name="desertfox.video_harvest_and_index")
+def video_harvest_and_index_task(
+    self,
+    query: Optional[str] = None,
+    video_url: Optional[str] = None,
+    max_videos: int = 8,
+    sample_interval_sec: float = 2.0,
+) -> Dict[str, Any]:
+    """
+    Background worker task to extract keyframes from a video URL or public video search query,
+    detect faces across timestamps, and index them into FAISS.
+    """
+    logger.info("Starting video harvest task %s (query=%s, url=%s)", self.request.id, query, video_url)
+    self.update_state(state="PROGRESS", meta={"step": "video_harvesting", "query": query, "video_url": video_url})
+    try:
+        engine = get_worker_engine()
+        if video_url:
+            res = engine.crawl_and_index_video_url(video_url, sample_interval_sec=sample_interval_sec)
+        elif query:
+            res = engine.harvest_and_index_video_query(query, max_videos=max_videos)
+        else:
+            return {"task_id": self.request.id, "status": "error", "error": "Neither query nor video_url provided"}
+        res["task_id"] = self.request.id
+        return res
+    except Exception as e:
+        logger.exception("Error in video harvest task %s: %s", self.request.id, e)
+        return {"task_id": self.request.id, "status": "error", "error": str(e)}

@@ -958,5 +958,108 @@ class TestDesertFoxV2(unittest.TestCase):
                 server.engine.enrollment = prev_enrollment
                 server.engine.embedder.verifies_identity = prev_identity
 
+    def test_video_frame_harvester_and_engine_pipeline(self):
+        """Verify VideoFrameHarvester keyframe extraction, timestamp deep links, video indexing, and video probe search."""
+        import base64
+        import tempfile
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.config import EngineConfig
+        from desertfox.privacy.enrollment import FaceEnrollment
+        from desertfox.ingestion.video_harvester import (
+            VideoFrameHarvester,
+            format_timestamp_hms,
+            build_timestamp_deeplink,
+        )
+
+        # 1. Verify timestamp formatting and deep link builders
+        self.assertEqual(format_timestamp_hms(85.2), "01:25")
+        self.assertEqual(format_timestamp_hms(3661.0), "01:01:01")
+        self.assertEqual(
+            build_timestamp_deeplink("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 42),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+        )
+        self.assertEqual(
+            VideoFrameHarvester.extract_youtube_id("https://youtu.be/dQw4w9WgXcQ?si=123"),
+            "dQw4w9WgXcQ",
+        )
+        self.assertEqual(
+            VideoFrameHarvester.extract_vimeo_id("https://vimeo.com/987654321"),
+            "987654321",
+        )
+
+        # 2. Create synthetic MP4 video with 4 distinct visual scenes
+        rng = np.random.default_rng(101)
+        f1 = rng.integers(10, 60, (120, 120, 3), dtype=np.uint8)
+        f2 = rng.integers(120, 200, (120, 120, 3), dtype=np.uint8)
+        f2[:60, :, :] = 250
+        f3 = rng.integers(0, 255, (120, 120, 3), dtype=np.uint8)
+        f3[:, :60, :] = 15
+
+        video_bytes = VideoFrameHarvester.create_synthetic_test_video([f1, f2, f3], fps=1.0)
+        self.assertGreater(len(video_bytes), 100)
+
+        decoded = VideoFrameHarvester.extract_frames_from_video_bytes(
+            video_bytes,
+            sample_interval_sec=1.0,
+            max_frames=10,
+            min_scene_delta=1.0,
+        )
+        self.assertGreaterEqual(len(decoded["frames"]), 2)
+        self.assertIn("timestamp_hms", decoded["frames"][0])
+
+        # 3. Verify DesertFoxEngine video indexing & video probe search
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "vid.index"), use_faiss=False)
+            eng = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+
+            idx_res = eng.index_video_bytes(
+                video_bytes=video_bytes,
+                source_url="https://example.org/keynote.mp4",
+                title="Security Keynote 2026",
+                sample_interval_sec=1.0,
+            )
+            self.assertEqual(idx_res["status"], "success")
+            self.assertGreaterEqual(idx_res["newly_indexed_faces"], 1)
+            first_frame_meta = eng.vector_store.records[0]["metadata"]
+            self.assertEqual(first_frame_meta["media_type"], "video")
+            self.assertIn("timestamp_hms", first_frame_meta)
+            self.assertIn("deep_link_url", first_frame_meta)
+
+            # Search using the same video as a video probe
+            probe_res = eng.search_probe_video(video_bytes, top_k=5, threshold=0.30)
+            self.assertEqual(probe_res["status"], "success")
+            self.assertGreaterEqual(probe_res["total_matches"], 1)
+            self.assertIn("video_probe_frames", probe_res)
+
+        # 4. Verify FastAPI /api/video/index-upload and /api/search/video-probe endpoints
+        b64_vid = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode()
+        prev_identity = getattr(server.engine.embedder, "verifies_identity", False)
+        prev_enrollment = server.engine.enrollment
+        server.engine.embedder.verifies_identity = False
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server.engine.enrollment = FaceEnrollment(os.path.join(tmpdir, "vid_enroll.npy"))
+            try:
+                client = TestClient(server.app)
+                up_res = client.post("/api/video/index-upload", json={
+                    "video_base64": b64_vid,
+                    "title": "API Test Video",
+                    "source_url": "https://example.org/api_talk.mp4",
+                    "sample_interval_sec": 1.0,
+                })
+                self.assertEqual(up_res.status_code, 200)
+                self.assertEqual(up_res.json()["status"], "success")
+
+                vp_res = client.post("/api/search/video-probe", json={
+                    "video_base64": b64_vid,
+                    "threshold": 0.3,
+                    "top_k": 5,
+                })
+                self.assertEqual(vp_res.status_code, 200)
+                self.assertIn("video_probe_frames", vp_res.json())
+            finally:
+                server.engine.enrollment = prev_enrollment
+                server.engine.embedder.verifies_identity = prev_identity
+
 if __name__ == "__main__":
     unittest.main()

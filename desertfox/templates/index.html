@@ -158,10 +158,10 @@
                                 <div class="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400 group-hover:text-emerald-400 group-hover:bg-slate-700/80 transition-all">
                                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                 </div>
-                                <div class="text-sm font-medium text-slate-300">Drag & Drop 1-4 facial angles or <span class="text-emerald-400 underline">Browse</span></div>
-                                <p class="text-xs text-slate-400">Multi-photo fusion: Selfie, ID, profile angle, expressions</p>
+                                <div class="text-sm font-medium text-slate-300">Drag & Drop 1-4 photos or a <span class="text-cyan-400 font-semibold">🎬 Video Clip</span> / <span class="text-emerald-400 underline">Browse</span></div>
+                                <p class="text-xs text-slate-400">Supports multi-angle photos OR MP4/WebM selfie videos (auto-extracts best keyframes)</p>
                             </div>
-                            <input type="file" id="file-input" accept="image/*" multiple class="hidden">
+                            <input type="file" id="file-input" accept="image/*,video/mp4,video/webm,video/quicktime" multiple class="hidden">
                         </div>
 
                         <!-- Multi-Photo Probe Gallery Strip & Alignment Status -->
@@ -628,6 +628,35 @@
                     </div>
                 </div>
 
+                <!-- VIDEO OSINT & KEYFRAME SCANNER -->
+                <div class="border border-amber-500/30 bg-[#0c101b] rounded-lg p-4 space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="text-xs mono font-semibold text-amber-400">🎬 VIDEO OSINT & TEMPORAL KEYFRAME SCANNER (YOUTUBE / VIMEO / MP4 TIMELINES)</span>
+                        <span class="text-[10px] mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">FRAME + TIMESTAMP EXTRACTION</span>
+                    </div>
+                    <p class="text-xs text-slate-400">
+                        People frequently appear in conference talks, interviews, panels, and news clips. Scan public video platforms for your target query above, or paste a direct YouTube/Vimeo/.mp4 video URL (or upload a video clip) to extract keyframes and index every face with exact <code class="text-amber-300">MM:SS</code> jump timestamps.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div class="md:col-span-2 space-y-1">
+                            <label class="text-[11px] mono text-slate-400">DIRECT VIDEO URL (YOUTUBE, VIMEO, OR .MP4/.WEBM STREAM)</label>
+                            <input type="text" id="video-url-input" placeholder="https://www.youtube.com/watch?v=... or https://example.com/talk.mp4" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 mono">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="text-[11px] mono text-slate-400">OR UPLOAD LOCAL VIDEO FILE</label>
+                            <input type="file" id="video-index-file" accept="video/mp4,video/webm,video/quicktime" onchange="executeVideoUploadIndex(this)" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 mono">
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3 pt-1">
+                        <button onclick="executeVideoSearchHarvest()" id="btn-video-search" class="px-5 py-2 rounded-lg text-xs mono font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.3)] transition-all flex items-center space-x-2">
+                            <span>🎬</span><span>SEARCH & INDEX PUBLIC VIDEOS FOR QUERY</span>
+                        </button>
+                        <button onclick="executeVideoUrlIndex()" id="btn-video-url" class="px-4 py-2 rounded-lg text-xs mono font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition-all flex items-center space-x-2">
+                            <span>🎞️</span><span>Extract & Index Frames from Video URL</span>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Search Harvester Terminal Log -->
                 <div class="space-y-2">
                     <div class="text-xs mono text-slate-400 flex items-center justify-between">
@@ -939,7 +968,27 @@
         });
 
         function handleFiles(fileList) {
-            const files = Array.from(fileList).slice(0, 4 - currentProbes.length);
+            const rawFiles = Array.from(fileList);
+            if (!rawFiles.length) return;
+
+            // If user selected a video file, load it as a video probe clip
+            const videoFile = rawFiles.find(f => f.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(f.name));
+            if (videoFile) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    currentProbes = [{
+                        base64: e.target.result,
+                        name: videoFile.name,
+                        isVideo: true
+                    }];
+                    updateProbeGallery();
+                };
+                reader.readAsDataURL(videoFile);
+                return;
+            }
+
+            const files = rawFiles.slice(0, 4 - currentProbes.filter(p => !p.isVideo).length);
+            currentProbes = currentProbes.filter(p => !p.isVideo);
             if (!files.length) return;
 
             files.forEach((file) => {
@@ -947,7 +996,8 @@
                 reader.onload = (e) => {
                     currentProbes.push({
                         base64: e.target.result,
-                        name: file.name
+                        name: file.name,
+                        isVideo: false
                     });
                     updateProbeGallery();
                 };
@@ -973,7 +1023,11 @@
             }
 
             currentProbeBase64 = currentProbes[0].base64;
-            probeImg.src = currentProbeBase64;
+            if (currentProbes[0].isVideo) {
+                probeImg.src = 'https://placehold.co/320x220/090d16/10b981?text=VIDEO+PROBE+CLIP+LOADED';
+            } else {
+                probeImg.src = currentProbeBase64;
+            }
             uploadPrompt.classList.add('hidden');
             previewWrapper.classList.remove('hidden');
             faceReticle.classList.remove('hidden');
@@ -983,12 +1037,15 @@
             faceReticle.style.left = '22%';
 
             multiProbeContainer.classList.remove('hidden');
-            probeCountBadge.innerText = currentProbes.length;
+            probeCountBadge.innerText = currentProbes[0].isVideo ? 'VIDEO (4 KEYFRAMES)' : currentProbes.length;
 
             multiProbeStrip.innerHTML = currentProbes.map((p, idx) => `
                 <div class="relative bg-slate-900 border border-slate-700 rounded-lg p-1 group flex flex-col items-center">
-                    <img src="${p.base64}" class="w-full h-16 object-cover rounded" alt="Probe angle ${idx+1}">
-                    <span class="text-[9px] mono text-slate-400 mt-1">${idx === 0 ? 'Primary' : `Angle #${idx+1}`}</span>
+                    ${p.isVideo
+                        ? `<div class="w-full h-16 bg-emerald-950/50 rounded flex items-center justify-center text-xs mono text-emerald-300 font-bold">🎬 MP4</div>`
+                        : `<img src="${p.base64}" class="w-full h-16 object-cover rounded" alt="Probe angle ${idx+1}">`
+                    }
+                    <span class="text-[9px] mono text-slate-400 mt-1 truncate max-w-full">${p.isVideo ? p.name : (idx === 0 ? 'Primary' : `Angle #${idx+1}`)}</span>
                     <button onclick="removeProbe(${idx}, event)" class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center text-[10px] leading-none transition-all shadow">
                         ✕
                     </button>
@@ -1004,7 +1061,7 @@
 
         async function executeSearch() {
             if (currentProbes.length === 0) {
-                alert('Please select or drop at least one facial portrait photo.');
+                alert('Please select or drop at least one facial portrait photo or video clip.');
                 return;
             }
 
@@ -1016,7 +1073,18 @@
                 const threshold = parseFloat(slider.value);
                 let res, data;
 
-                if (currentProbes.length === 1) {
+                if (currentProbes[0].isVideo) {
+                    res = await fetch('/api/search/video-probe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            video_base64: currentProbes[0].base64,
+                            threshold: threshold,
+                            top_k: 15,
+                            max_probe_frames: 4
+                        })
+                    });
+                } else if (currentProbes.length === 1) {
                     res = await fetch('/api/search', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1128,6 +1196,9 @@
                 const mapLink = forensics.map_link || (gps ? `https://www.google.com/maps?q=${gps.latitude},${gps.longitude}` : null);
                 const camera = (forensics.camera_make && forensics.camera_make !== 'Unknown') ? `${forensics.camera_make} ${forensics.camera_model}` : null;
                 const dhash = (meta.fingerprint && meta.fingerprint.dhash) ? meta.fingerprint.dhash : (meta.dhash || 'N/A');
+                const isVideoMatch = meta.media_type === 'video';
+                const videoTimestamp = meta.timestamp_hms || '00:00';
+                const deepLink = meta.deep_link_url || m.source_url;
 
                 card.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
@@ -1135,13 +1206,14 @@
                             <div class="flex flex-wrap items-center gap-2">
                                 <span class="mono text-xs font-bold text-white">#${idx + 1} ${m.record_id}</span>
                                 <span class="mono text-[10px] px-2 py-0.5 rounded border ${badgeColor}">${simPercent}% SIMILARITY (${m.confidence})</span>
+                                ${isVideoMatch ? `<span class="mono text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">🎬 VIDEO @ ${videoTimestamp}</span>` : ''}
                                 <span class="mono text-[10px] text-slate-400">L2: ${m.l2_distance || 'N/A'}</span>
                             </div>
                             <div class="text-xs text-slate-200 font-semibold truncate mono">
                                 ${pageTitle} <span class="text-slate-400 font-normal text-[11px]">${hostIp}${author}</span>
                             </div>
                             <div class="text-xs text-slate-400 truncate mono">
-                                <a href="${m.source_url}" target="_blank" class="hover:text-emerald-400 underline">${m.source_url}</a>
+                                <a href="${deepLink}" target="_blank" class="hover:text-emerald-400 underline">${deepLink}</a>
                             </div>
                             ${camera ? `<div class="text-[11px] mono text-cyan-300">📷 Camera: ${camera}</div>` : ''}
                         </div>
@@ -1149,12 +1221,17 @@
                     <div class="flex flex-wrap items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] mono gap-2">
                         <span class="text-slate-400">FINGERPRINT: <code class="text-slate-300">${dhash}</code></span>
                         <div class="flex items-center space-x-2">
+                            ${isVideoMatch ? `
+                                <a href="${deepLink}" target="_blank" onclick="event.stopPropagation()" class="px-2.5 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 transition-all flex items-center space-x-1">
+                                    <span>▶️</span><span>Jump to ${videoTimestamp}</span>
+                                </a>
+                            ` : ''}
                             ${mapLink ? `
                                 <a href="${mapLink}" target="_blank" class="px-2.5 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 transition-all flex items-center space-x-1">
                                     <span>📍</span><span>GPS Map</span>
                                 </a>
                             ` : ''}
-                            <button onclick="event.stopPropagation(); openTakedownModal('${m.source_url}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
+                            <button onclick="event.stopPropagation(); openTakedownModal('${deepLink}')" class="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all">
                                 ⚡ 1-Click Takedown
                             </button>
                         </div>
@@ -1644,6 +1721,145 @@
             } catch (e) {
                 consoleBox.innerHTML += `\n[!] Failed to enqueue dorking task: ${e.message}`;
             }
+        }
+
+        // VIDEO OSINT & TEMPORAL KEYFRAME HANDLERS
+        async function executeVideoSearchHarvest() {
+            const query = document.getElementById('search-query-input').value.trim();
+            if (!query) {
+                alert("Please enter a target name, username, or handle in the query box above.");
+                return;
+            }
+            const consoleBox = document.getElementById('search-harvest-console');
+            const statusBox = document.getElementById('search-harvest-status');
+            const resultsSec = document.getElementById('search-results-section');
+            const resultsGrid = document.getElementById('search-results-grid');
+            const btn = document.getElementById('btn-video-search');
+
+            btn.disabled = true;
+            statusBox.innerText = "SCANNING VIDEOS...";
+            statusBox.className = "text-amber-400 animate-pulse";
+            consoleBox.innerHTML += `\n[*] Searching public videos (YouTube, Bing Videos) for "${query}" and extracting timeline keyframes...`;
+
+            try {
+                const res = await fetch('/api/video/search-harvest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query, max_videos: 8 })
+                });
+                const data = await res.json();
+                consoleBox.innerHTML += `\n[+] Discovered ${data.videos_discovered || 0} videos, analyzed ${data.frames_analyzed || 0} temporal keyframes.`;
+                consoleBox.innerHTML += `\n[✓] Indexed ${data.newly_indexed_faces || 0} distinct video face appearances with timestamp deep links into FAISS.`;
+                statusBox.innerText = "COMPLETE";
+                statusBox.className = "text-emerald-400";
+                fetchStats();
+
+                if (data.items && data.items.length > 0) {
+                    resultsSec.classList.remove('hidden');
+                    resultsGrid.innerHTML = '';
+                    data.items.forEach(it => {
+                        const card = document.createElement('div');
+                        card.className = "bg-[#090d16] border border-amber-800/50 rounded-lg p-2 space-y-1.5 flex flex-col justify-between";
+                        card.innerHTML = `
+                            <div class="h-28 w-full bg-slate-950 rounded overflow-hidden flex items-center justify-center relative">
+                                <img src="${it.frame_image_url}" alt="${it.title || 'Video Frame'}" class="h-full w-full object-cover" onerror="this.src='https://placehold.co/150x150/0f172a/f59e0b?text=Video+Frame';">
+                                <span class="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-amber-300 text-[9px] mono border border-amber-500/40">🎬 ${it.timestamp_hms || '00:00'}</span>
+                            </div>
+                            <div class="flex items-center justify-between text-[10px] mono">
+                                <span class="px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">${it.platform || 'Video'}</span>
+                                <span class="text-slate-400 truncate max-w-[90px]">Frame #${it.frame_index}</span>
+                            </div>
+                            <a href="${it.deep_link_url}" target="_blank" class="text-[10px] mono text-amber-400 hover:underline truncate block" title="${it.title}">
+                                ▶️ ${it.title ? it.title.substring(0, 20) + '...' : 'Jump to Frame'}
+                            </a>
+                        `;
+                        resultsGrid.appendChild(card);
+                    });
+                }
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Video search error: ${e.message}`;
+                statusBox.innerText = "ERROR";
+                statusBox.className = "text-rose-400";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function executeVideoUrlIndex() {
+            const videoUrl = document.getElementById('video-url-input').value.trim();
+            if (!videoUrl) {
+                alert("Please enter a YouTube, Vimeo, or .mp4/.webm video URL.");
+                return;
+            }
+            const consoleBox = document.getElementById('search-harvest-console');
+            const statusBox = document.getElementById('search-harvest-status');
+            const btn = document.getElementById('btn-video-url');
+
+            btn.disabled = true;
+            statusBox.innerText = "EXTRACTING FRAMES...";
+            statusBox.className = "text-amber-400 animate-pulse";
+            consoleBox.innerHTML += `\n[*] Extracting keyframes & timestamps from video URL: ${videoUrl}...`;
+
+            try {
+                const res = await fetch('/api/video/index-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_url: videoUrl, sample_interval_sec: 2.0, max_frames: 20 })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Video URL indexing failed');
+                consoleBox.innerHTML += `\n[✓] Video "${data.title}" (${data.platform}): analyzed ${data.frames_analyzed} keyframes, indexed ${data.newly_indexed_faces} distinct face appearances.`;
+                statusBox.innerText = "COMPLETE";
+                statusBox.className = "text-emerald-400";
+                fetchStats();
+            } catch (e) {
+                consoleBox.innerHTML += `\n[!] Video URL indexing error: ${e.message}`;
+                statusBox.innerText = "ERROR";
+                statusBox.className = "text-rose-400";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function executeVideoUploadIndex(inputEl) {
+            const file = inputEl.files && inputEl.files[0];
+            if (!file) return;
+
+            const consoleBox = document.getElementById('search-harvest-console');
+            const statusBox = document.getElementById('search-harvest-status');
+            statusBox.innerText = "DECODING VIDEO...";
+            statusBox.className = "text-amber-400 animate-pulse";
+            consoleBox.innerHTML += `\n[*] Uploading & decoding local video "${file.name}" for timeline face indexing...`;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const res = await fetch('/api/video/index-upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            video_base64: e.target.result,
+                            title: file.name,
+                            source_url: `uploaded://${file.name}`,
+                            sample_interval_sec: 1.5,
+                            max_frames: 20
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || 'Video upload indexing failed');
+                    consoleBox.innerHTML += `\n[✓] Decoded "${file.name}" (${data.duration_sec || 0}s @ ${data.fps || 0} fps): analyzed ${data.frames_analyzed} frames, indexed ${data.newly_indexed_faces} face appearances.`;
+                    statusBox.innerText = "COMPLETE";
+                    statusBox.className = "text-emerald-400";
+                    fetchStats();
+                } catch (err) {
+                    consoleBox.innerHTML += `\n[!] Video upload indexing error: ${err.message}`;
+                    statusBox.innerText = "ERROR";
+                    statusBox.className = "text-rose-400";
+                } finally {
+                    inputEl.value = '';
+                }
+            };
+            reader.readAsDataURL(file);
         }
 
         // CURATED SEED HUB & BULK INGESTION HANDLERS

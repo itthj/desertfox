@@ -33,6 +33,7 @@ from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.search_aggregator import SearchAggregator
 from desertfox.ingestion.dorker import OSINTDorker
 from desertfox.ingestion.seed_manager import SeedHubManager
+from desertfox.ingestion.video_harvester import VideoFrameHarvester, build_timestamp_deeplink, format_timestamp_hms
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
 from desertfox.ingestion.site_crawler import SiteCrawler
 from desertfox.config import EngineConfig
@@ -122,6 +123,7 @@ class DesertFoxEngine:
         self.harvester = AdvancedHarvester()
         self.async_harvester = AsyncMediaHarvester()
         self.search_aggregator = SearchAggregator()
+        self.video_harvester = VideoFrameHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
 
         # Optional FAISS High-Speed Vector Index
@@ -707,6 +709,261 @@ class DesertFoxEngine:
             "total_images_indexed": total_indexed,
             "details": details
         }
+
+    def index_video_frames(
+        self,
+        frames: List[Dict[str, Any]],
+        video_url: str,
+        title: str = "Video Stream",
+        platform: str = "Video",
+        author: str = "",
+        only_enrolled: bool = False,
+        persist: bool = True,
+        max_faces_per_frame: int = 4,
+        within_video_dedup_cosine: float = 0.92,
+    ) -> Dict[str, Any]:
+        """
+        Detects and indexes all distinct faces appearing across a sequence of video keyframes.
+        Supports multi-face detection per frame (e.g. interviews, panels, storyboards)
+        and within-video biometric deduplication so static talking-head shots do not
+        create redundant index entries.
+        """
+        indexed_faces = 0
+        skipped_duplicates = 0
+        frame_reports: List[Dict[str, Any]] = []
+        video_vectors: List[np.ndarray] = []
+
+        for f_idx, f_data in enumerate(frames):
+            pil_img: Image.Image = f_data["image"]
+            ts_sec = float(f_data.get("timestamp_sec", 0.0))
+            ts_hms = f_data.get("timestamp_hms") or format_timestamp_hms(ts_sec)
+            frame_num = int(f_data.get("frame_index", f_idx))
+            deep_link = f_data.get("deep_link_url") or build_timestamp_deeplink(video_url, ts_sec)
+            frame_img_url = f_data.get("frame_image_url") or video_url
+
+            faces = self.detector.detect_faces(pil_img)
+            if faces:
+                crops_and_boxes = [
+                    (self.detector.crop_and_align(pil_img, face), face.bbox)
+                    for face in faces[:max_faces_per_frame]
+                ]
+            else:
+                crops_and_boxes = [(pil_img.resize((112, 112)), (0, 0, pil_img.width, pil_img.height))]
+
+            faces_in_this_frame = 0
+            for sub_i, (crop_img, bbox) in enumerate(crops_and_boxes):
+                # Compute embedding first to deduplicate consecutive video frames of the same speaker
+                vec = self._unit(self.embedder.extract_from_pil(crop_img))
+                if any(float(np.dot(vec, prev_v)) >= within_video_dedup_cosine for prev_v in video_vectors):
+                    skipped_duplicates += 1
+                    continue
+
+                hashes = MultiPerceptualHasher.compute_cascade_fingerprint(crop_img)
+                dhash = hashes.get("dhash", "00000000")
+                rec_id = f"vid_{dhash[:8]}_f{frame_num}_{sub_i}"
+
+                meta = {
+                    "media_type": "video",
+                    "video_platform": platform,
+                    "video_title": title,
+                    "page_title": f"🎬 {title} [{ts_hms}]",
+                    "author": author,
+                    "source_domain": platform.lower(),
+                    "timestamp_sec": ts_sec,
+                    "timestamp_hms": ts_hms,
+                    "frame_index": frame_num,
+                    "face_index_in_frame": sub_i,
+                    "deep_link_url": deep_link,
+                    "frame_image_url": frame_img_url,
+                    "bbox": bbox,
+                }
+
+                res = self.process_and_index_image(
+                    image=crop_img,
+                    record_id=rec_id,
+                    source_url=deep_link,
+                    metadata=meta,
+                    enforce_fiqa=False,
+                    only_enrolled=only_enrolled,
+                )
+                if res.get("success"):
+                    video_vectors.append(vec)
+                    indexed_faces += 1
+                    faces_in_this_frame += 1
+                    frame_reports.append({
+                        "record_id": rec_id,
+                        "timestamp_sec": ts_sec,
+                        "timestamp_hms": ts_hms,
+                        "frame_index": frame_num,
+                        "deep_link_url": deep_link,
+                        "frame_image_url": frame_img_url,
+                        "title": title,
+                        "platform": platform,
+                    })
+
+        if indexed_faces > 0 and persist:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        return {
+            "status": "success",
+            "video_url": video_url,
+            "title": title,
+            "platform": platform,
+            "frames_analyzed": len(frames),
+            "newly_indexed_faces": indexed_faces,
+            "skipped_within_video_duplicates": skipped_duplicates,
+            "indexed_frames": frame_reports,
+        }
+
+    def index_video_bytes(
+        self,
+        video_bytes: bytes,
+        source_url: str = "uploaded://video.mp4",
+        title: str = "Uploaded Video Clip",
+        sample_interval_sec: float = 1.5,
+        max_frames: int = 20,
+        only_enrolled: bool = False,
+    ) -> Dict[str, Any]:
+        """Decodes a raw video file (MP4/WebM/MOV) and indexes all faces across its timeline."""
+        decoded = self.video_harvester.extract_frames_from_video_bytes(
+            video_bytes,
+            sample_interval_sec=sample_interval_sec,
+            max_frames=max_frames,
+        )
+        if decoded.get("error"):
+            return {"status": "error", "message": decoded["error"], "newly_indexed_faces": 0}
+
+        res = self.index_video_frames(
+            frames=decoded.get("frames", []),
+            video_url=source_url,
+            title=title,
+            platform="UploadedVideo",
+            only_enrolled=only_enrolled,
+        )
+        res["duration_sec"] = decoded.get("duration_sec", 0.0)
+        res["fps"] = decoded.get("fps", 0.0)
+        return res
+
+    def crawl_and_index_video_url(
+        self,
+        video_url: str,
+        sample_interval_sec: float = 2.0,
+        max_frames: int = 20,
+    ) -> Dict[str, Any]:
+        """
+        Extracts keyframes from a YouTube, Vimeo, or direct .mp4/.webm video URL
+        and indexes all detected faces with exact timestamp deep links.
+        """
+        harvested = self.video_harvester.harvest_video_url(
+            video_url,
+            sample_interval_sec=sample_interval_sec,
+            max_frames=max_frames,
+        )
+        if harvested.get("error"):
+            return {"status": "error", "message": harvested["error"], "newly_indexed_faces": 0}
+
+        return self.index_video_frames(
+            frames=harvested.get("frames", []),
+            video_url=harvested.get("video_url", video_url),
+            title=harvested.get("title", "Web Video"),
+            platform=harvested.get("platform", "Video"),
+            author=harvested.get("author", ""),
+        )
+
+    def harvest_and_index_video_query(
+        self,
+        query: str,
+        max_videos: int = 8,
+    ) -> Dict[str, Any]:
+        """
+        Searches public video platforms (YouTube, Bing Videos) for a target identity/name,
+        extracts temporal keyframes across each discovered video, detects faces,
+        and indexes them into FAISS with jump-to-timestamp deep links.
+        """
+        discovered_videos = self.video_harvester.search_public_videos(query, max_videos=max_videos)
+        total_indexed = 0
+        total_frames = 0
+        all_indexed_items: List[Dict[str, Any]] = []
+        video_summaries: List[Dict[str, Any]] = []
+
+        for vid in discovered_videos:
+            v_url = vid["video_url"]
+            harvested = self.video_harvester.harvest_video_url(v_url)
+            frames = harvested.get("frames", [])
+            total_frames += len(frames)
+            if not frames:
+                continue
+
+            idx_res = self.index_video_frames(
+                frames=frames,
+                video_url=v_url,
+                title=harvested.get("title") or vid.get("title", query),
+                platform=vid.get("platform", "YouTube"),
+                author=harvested.get("author", ""),
+                persist=False,
+            )
+            count = idx_res.get("newly_indexed_faces", 0)
+            total_indexed += count
+            all_indexed_items.extend(idx_res.get("indexed_frames", []))
+            video_summaries.append({
+                "video_url": v_url,
+                "title": harvested.get("title") or vid.get("title", ""),
+                "platform": vid.get("platform", "YouTube"),
+                "frames_analyzed": len(frames),
+                "faces_indexed": count,
+            })
+
+        if total_indexed > 0:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        return {
+            "status": "success",
+            "query": query,
+            "videos_discovered": len(discovered_videos),
+            "frames_analyzed": total_frames,
+            "newly_indexed_faces": total_indexed,
+            "videos": video_summaries,
+            "items": all_indexed_items,
+        }
+
+    def search_probe_video(
+        self,
+        video_bytes: bytes,
+        top_k: int = 15,
+        threshold: float = 0.55,
+        max_probe_frames: int = 4,
+    ) -> Dict[str, Any]:
+        """
+        Extracts the sharpest, most pose-diverse face frames from an uploaded probe video clip
+        (e.g. a selfie video), fuses them via MultiProbeFusion, and searches the vector index.
+        """
+        best_frames = VideoFrameHarvester.extract_best_probe_frames(
+            video_bytes=video_bytes,
+            detector=self.detector,
+            max_probes=max_probe_frames,
+        )
+        if not best_frames:
+            raise ValueError("Could not decode any valid frames from uploaded video.")
+
+        probe_images = [f["image"] for f in best_frames]
+        search_res = self.search_multi_probe_images(
+            probe_images=probe_images,
+            top_k=top_k,
+            threshold=threshold,
+        )
+        search_res["video_probe_frames"] = [
+            {
+                "frame_index": f["frame_index"],
+                "timestamp_sec": f["timestamp_sec"],
+                "timestamp_hms": f["timestamp_hms"],
+                "quality_score": f["score"],
+                "has_face": f["has_face"],
+            }
+            for f in best_frames
+        ]
+        return search_res
 
     def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:
         """Finds near-duplicate images indexed in the BK-Tree within Hamming distance."""

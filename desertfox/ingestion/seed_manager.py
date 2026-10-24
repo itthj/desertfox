@@ -5,8 +5,13 @@ and university staff portals.
 """
 
 import re
+import os
+import json
+import time
+import hashlib
 import logging
-from typing import List, Dict, Any, Set
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Set, Optional
 import xml.etree.ElementTree as ET
 import requests
 
@@ -117,3 +122,125 @@ class SeedHubManager:
         """Returns URLs for a curated bundle ID."""
         bundle = cls.CURATED_BUNDLES.get(bundle_id)
         return bundle["urls"] if bundle else []
+
+
+class SeedScheduleRegistry:
+    """Manages persistent recurring crawl targets and scheduler configuration."""
+
+    DEFAULT_STORE_PATH = "./data/crawl_schedules.json"
+
+    def __init__(self, store_path: Optional[str] = None):
+        self.store_path = store_path or os.environ.get("DESERTFOX_SCHEDULES_PATH", self.DEFAULT_STORE_PATH)
+        self.schedules: Dict[str, Dict[str, Any]] = {}
+        self.load()
+
+    def load(self) -> None:
+        """Loads schedule entries from disk or initializes defaults."""
+        if os.path.exists(self.store_path):
+            try:
+                with open(self.store_path, "r", encoding="utf-8") as f:
+                    self.schedules = json.load(f)
+                return
+            except Exception as e:
+                logger.warning("Failed to load schedules from %s: %s", self.store_path, e)
+
+        self.schedules = {}
+        self._init_defaults()
+
+    def _init_defaults(self) -> None:
+        """Populates default high-probability scheduled targets."""
+        default_targets = [
+            ("bundle", "tech_execs", "Tech Execs & Leadership Rosters", 12, 10),
+            ("bundle", "academic_rosters", "Academic Faculty Rosters", 24, 10),
+            ("bundle", "open_contributors", "Open Source & Security Rosters", 24, 10),
+        ]
+        for t_type, target, name, interval, max_imgs in default_targets:
+            self.register(target=target, target_type=t_type, name=name, interval_hours=interval, max_images=max_imgs, save=False)
+        self.save()
+
+    def save(self) -> None:
+        """Atomically saves schedule dictionary to disk."""
+        os.makedirs(os.path.dirname(os.path.abspath(self.store_path)), exist_ok=True)
+        tmp = f"{self.store_path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.schedules, f, indent=2)
+        os.replace(tmp, self.store_path)
+
+    def register(
+        self,
+        target: str,
+        target_type: str = "url",
+        name: str = "",
+        interval_hours: int = 12,
+        max_images: int = 15,
+        save: bool = True
+    ) -> Dict[str, Any]:
+        """Registers a recurring target for periodic indexing."""
+        sched_id = f"sched_{hashlib.sha256(f'{target_type}:{target}'.encode()).hexdigest()[:10]}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "id": sched_id,
+            "name": name or target,
+            "target_type": target_type,
+            "target": target,
+            "interval_hours": interval_hours,
+            "max_images": max_images,
+            "status": "active",
+            "last_run": None,
+            "last_faces_indexed": 0,
+            "total_faces_indexed": 0,
+            "created_at": now_iso
+        }
+        self.schedules[sched_id] = entry
+        if save:
+            self.save()
+        return entry
+
+    def delete(self, sched_id: str) -> bool:
+        """Deletes a schedule by ID."""
+        if sched_id in self.schedules:
+            del self.schedules[sched_id]
+            self.save()
+            return True
+        return False
+
+    def toggle(self, sched_id: str) -> Optional[Dict[str, Any]]:
+        """Toggles schedule between 'active' and 'paused'."""
+        if sched_id in self.schedules:
+            curr = self.schedules[sched_id].get("status", "active")
+            self.schedules[sched_id]["status"] = "paused" if curr == "active" else "active"
+            self.save()
+            return self.schedules[sched_id]
+        return None
+
+    def get_all(self) -> List[Dict[str, Any]]:
+        """Returns list of all schedule configurations."""
+        return list(self.schedules.values())
+
+    def get_due_schedules(self) -> List[Dict[str, Any]]:
+        """Returns schedules that are currently due for execution."""
+        due = []
+        now_ts = time.time()
+        for s in self.schedules.values():
+            if s.get("status") != "active":
+                continue
+            last_run_str = s.get("last_run")
+            if not last_run_str:
+                due.append(s)
+                continue
+            try:
+                last_dt = datetime.fromisoformat(last_run_str)
+                interval_secs = s.get("interval_hours", 12) * 3600
+                if (now_ts - last_dt.timestamp()) >= interval_secs:
+                    due.append(s)
+            except Exception:
+                due.append(s)
+        return due
+
+    def record_run(self, sched_id: str, new_faces: int = 0) -> None:
+        """Records execution timestamp and count of indexed faces."""
+        if sched_id in self.schedules:
+            self.schedules[sched_id]["last_run"] = datetime.now(timezone.utc).isoformat()
+            self.schedules[sched_id]["last_faces_indexed"] = new_faces
+            self.schedules[sched_id]["total_faces_indexed"] = self.schedules[sched_id].get("total_faces_indexed", 0) + new_faces
+            self.save()

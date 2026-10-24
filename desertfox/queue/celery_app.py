@@ -32,4 +32,14 @@ celery_app.conf.update(
     task_soft_time_limit=1500,
     worker_prefetch_multiplier=1,
     worker_concurrency=int(os.environ.get("CELERY_WORKER_CONCURRENCY", "4")),
+    beat_schedule={
+        "continuous-scheduled-crawl-sweep": {
+            "task": "desertfox.run_scheduled_crawl_sweep",
+            "schedule": float(os.environ.get("DESERTFOX_CRAWL_SWEEP_SECONDS", "1800")),  # default: every 30 mins
+        },
+        "periodic-index-optimization": {
+            "task": "desertfox.optimize_and_compact_index",
+            "schedule": float(os.environ.get("DESERTFOX_COMPACT_SECONDS", "7200")),  # default: every 2 hours
+        },
+    }
 )

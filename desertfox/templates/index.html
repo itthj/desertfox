@@ -391,6 +391,64 @@
                     </div>
                 </div>
             </div>
+
+            <!-- CONTINUOUS CRAWLER & AUTOMATION SCHEDULER -->
+            <div class="bg-[#0f172a]/90 rounded-xl p-6 border border-slate-800 space-y-6">
+                <div class="border-b border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h2 class="text-sm font-semibold mono text-emerald-400">[CONTINUOUS_CRAWLER_AND_AUTOMATION_SCHEDULER]</h2>
+                        <p class="text-xs text-slate-400">Autonomous Celery Beat background scheduler. Periodically sweeps seed rosters, parses sitemaps, and optimizes FAISS indices without manual intervention.</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="triggerSchedulerNow()" id="btn-trigger-scheduler" class="px-3 py-1.5 rounded text-xs mono font-semibold bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-500/30 transition-all flex items-center space-x-1.5">
+                            <span>⚡</span><span>RUN SWEEP PASS NOW</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Registration Form -->
+                <div class="border border-slate-800 bg-[#090d16] rounded-lg p-4 space-y-3">
+                    <span class="text-xs mono font-semibold text-slate-300">ADD RECURRING TARGET TO SCHEDULER</span>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div class="md:col-span-2 space-y-1.5">
+                            <label class="text-[11px] mono text-slate-400">TARGET URL, SITEMAP, OR BUNDLE ID</label>
+                            <input type="text" id="sched-target-input" placeholder="e.g. https://target.edu/faculty or sitemap.xml" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[11px] mono text-slate-400">TYPE</label>
+                            <select id="sched-type-select" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                                <option value="url" selected>Web Page / Directory</option>
+                                <option value="sitemap">XML Sitemap</option>
+                                <option value="bundle">Curated Bundle</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="text-[11px] mono text-slate-400">INTERVAL (HOURS)</label>
+                            <select id="sched-interval-select" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                                <option value="6">Every 6 Hours</option>
+                                <option value="12" selected>Every 12 Hours</option>
+                                <option value="24">Every 24 Hours (Daily)</option>
+                                <option value="48">Every 48 Hours</option>
+                                <option value="168">Weekly (168 Hours)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between pt-1">
+                        <input type="text" id="sched-name-input" placeholder="Optional label (e.g. 'Stanford CS Dept')" class="w-1/2 bg-[#050811] border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 mono">
+                        <button onclick="registerNewSchedule()" class="px-4 py-1.5 rounded text-xs mono font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center space-x-1.5">
+                            <span>➕</span><span>ADD TO SCHEDULER</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Active Recurring Feeds List -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between text-xs mono text-slate-400">
+                        <span>ACTIVE CONTINUOUS FEEDS</span>
+                        <span id="sched-count-badge" class="text-emerald-400">Loading...</span>
+                    </div>
+                    <div id="sched-table-container" class="space-y-2"></div>
+                </div>
             </div>
         </section>
 
@@ -1510,6 +1568,123 @@
                 consoleBox.innerHTML += `\n[!] Failed to enqueue bulk crawl task: ${e.message}`;
             }
         }
+
+        // CONTINUOUS SCHEDULER MANAGEMENT
+        async function fetchSchedules() {
+            try {
+                const res = await fetch('/api/scheduler/schedules');
+                const data = await res.json();
+                const container = document.getElementById('sched-table-container');
+                const badge = document.getElementById('sched-count-badge');
+                if (!container) return;
+
+                const schedules = data.schedules || [];
+                if (badge) badge.innerText = `${schedules.filter(s => s.status === 'active').length} Active | ${data.due_count || 0} Due`;
+
+                if (schedules.length === 0) {
+                    container.innerHTML = '<div class="text-xs text-slate-500 italic p-2">No continuous crawl targets scheduled.</div>';
+                    return;
+                }
+
+                container.innerHTML = schedules.map(s => {
+                    const isActive = s.status === 'active';
+                    const lastRun = s.last_run ? new Date(s.last_run).toLocaleString() : 'Never';
+                    return `
+                        <div class="bg-[#050811] border border-slate-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2 text-xs mono hover:border-slate-700 transition-all">
+                            <div class="space-y-0.5 max-w-sm">
+                                <div class="flex items-center space-x-2">
+                                    <span class="font-bold text-slate-200">${s.name || s.target}</span>
+                                    <span class="px-1.5 py-0.5 rounded text-[10px] ${isActive ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-slate-900 text-slate-500 border border-slate-800'}">${s.status.toUpperCase()}</span>
+                                    <span class="px-1.5 py-0.5 rounded text-[10px] bg-blue-950 text-blue-400 border border-blue-800">${s.target_type.toUpperCase()}</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate max-w-md">${s.target}</div>
+                                <div class="text-[10px] text-slate-500">Every ${s.interval_hours}h · Last run: ${lastRun} · Indexed: ${s.total_faces_indexed || 0} faces</div>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <button onclick="toggleSchedule('${s.id}')" class="px-2.5 py-1 rounded text-[11px] mono font-semibold ${isActive ? 'bg-amber-950 text-amber-400 border border-amber-800 hover:bg-amber-900' : 'bg-emerald-950 text-emerald-400 border border-emerald-800 hover:bg-emerald-900'} transition-all">
+                                    ${isActive ? 'Pause' : 'Activate'}
+                                </button>
+                                <button onclick="deleteSchedule('${s.id}')" class="px-2.5 py-1 rounded text-[11px] mono font-semibold bg-rose-950 text-rose-400 border border-rose-800 hover:bg-rose-900 transition-all">
+                                    Remove
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error("Failed to fetch schedules:", e);
+            }
+        }
+
+        async function registerNewSchedule() {
+            const target = document.getElementById('sched-target-input').value.trim();
+            const type = document.getElementById('sched-type-select').value;
+            const interval = parseInt(document.getElementById('sched-interval-select').value);
+            const name = document.getElementById('sched-name-input').value.trim();
+
+            if (!target) {
+                alert("Please specify a target URL, XML Sitemap, or bundle ID.");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/scheduler/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: target,
+                        target_type: type,
+                        interval_hours: interval,
+                        name: name || null,
+                        max_images: 15
+                    })
+                });
+                const data = await res.json();
+                document.getElementById('sched-target-input').value = '';
+                document.getElementById('sched-name-input').value = '';
+                fetchSchedules();
+            } catch (e) {
+                alert("Failed to register schedule: " + e.message);
+            }
+        }
+
+        async function toggleSchedule(schedId) {
+            try {
+                await fetch(`/api/scheduler/toggle/${schedId}`, { method: 'POST' });
+                fetchSchedules();
+            } catch (e) {
+                console.error("Toggle error:", e);
+            }
+        }
+
+        async function deleteSchedule(schedId) {
+            if (!confirm("Are you sure you want to remove this recurring schedule?")) return;
+            try {
+                await fetch(`/api/scheduler/schedules/${schedId}`, { method: 'DELETE' });
+                fetchSchedules();
+            } catch (e) {
+                console.error("Delete error:", e);
+            }
+        }
+
+        async function triggerSchedulerNow() {
+            const btn = document.getElementById('btn-trigger-scheduler');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch('/api/scheduler/trigger-now', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message || "Scheduler sweep initiated!");
+                fetchSchedules();
+                fetchStats();
+            } catch (e) {
+                alert("Failed to trigger scheduler: " + e.message);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // Initialize schedules on page load
+        fetchSchedules();
 
         // Zero-Knowledge Opt-Out (ZKO)
         const optoutDrop = document.getElementById('optout-drop-zone');

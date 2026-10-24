@@ -20,7 +20,7 @@ from desertfox.security import (
 )
 from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.privacy.takedown import TakedownNoticeGenerator
-from desertfox.ingestion.seed_manager import SeedHubManager
+from desertfox.ingestion.seed_manager import SeedHubManager, SeedScheduleRegistry
 from desertfox.ingestion.dorker import OSINTDorker
 
 app = FastAPI(
@@ -73,6 +73,13 @@ class BulkCrawlRequest(BaseModel):
     sitemap_url: Optional[str] = Field(None, description="XML Sitemap URL")
     bundle_id: Optional[str] = Field(None, description="Curated bundle ID ('tech_execs', 'academic_rosters', 'open_contributors')")
     max_images_per_url: int = Field(15, ge=1, le=50)
+
+class ScheduleRegisterRequest(BaseModel):
+    target: str = Field(..., description="Target URL, XML sitemap, or bundle ID")
+    target_type: str = Field("url", description="'url', 'sitemap', or 'bundle'")
+    name: Optional[str] = Field(None, description="Descriptive name")
+    interval_hours: int = Field(12, ge=1, le=168, description="Crawl frequency in hours")
+    max_images: int = Field(15, ge=1, le=50)
 
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
@@ -382,6 +389,78 @@ def enqueue_bulk_crawl_job(req: BulkCrawlRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue bulk crawl task: {str(e)}")
+
+
+@app.get("/api/scheduler/schedules")
+def list_schedules():
+    """Lists all registered recurring continuous crawler targets and schedules."""
+    registry = SeedScheduleRegistry()
+    return {
+        "status": "success",
+        "total_schedules": len(registry.schedules),
+        "schedules": registry.get_all(),
+        "due_count": len(registry.get_due_schedules())
+    }
+
+
+@app.post("/api/scheduler/register")
+def register_schedule(req: ScheduleRegisterRequest):
+    """Registers a new continuous crawl target into the background scheduler."""
+    registry = SeedScheduleRegistry()
+    entry = registry.register(
+        target=req.target,
+        target_type=req.target_type,
+        name=req.name or "",
+        interval_hours=req.interval_hours,
+        max_images=req.max_images
+    )
+    return {
+        "status": "registered",
+        "schedule": entry
+    }
+
+
+@app.post("/api/scheduler/toggle/{schedule_id}")
+def toggle_schedule(schedule_id: str):
+    """Toggles a schedule between active and paused states."""
+    registry = SeedScheduleRegistry()
+    updated = registry.toggle(schedule_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Schedule ID not found")
+    return {"status": "updated", "schedule": updated}
+
+
+@app.delete("/api/scheduler/schedules/{schedule_id}")
+def delete_schedule(schedule_id: str):
+    """Deletes a schedule from the continuous crawler."""
+    registry = SeedScheduleRegistry()
+    deleted = registry.delete(schedule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Schedule ID not found")
+    return {"status": "deleted", "schedule_id": schedule_id}
+
+
+@app.post("/api/scheduler/trigger-now")
+def trigger_scheduler_sweep():
+    """Manually triggers an immediate continuous crawler sweep pass."""
+    try:
+        from desertfox.queue.tasks import run_scheduled_crawl_sweep
+        task = run_scheduled_crawl_sweep.delay()
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "message": "Immediate continuous crawler sweep pass dispatched to Celery"
+        }
+    except Exception as e:
+        try:
+            from desertfox.queue.tasks import run_scheduled_crawl_sweep
+            res = run_scheduled_crawl_sweep.apply()
+            return {
+                "status": "executed",
+                "result": res.result
+            }
+        except Exception as inner_e:
+            raise HTTPException(status_code=500, detail=f"Failed to trigger scheduler sweep: {str(e)} ({str(inner_e)})")
 
 
 @app.post("/api/opt-out")

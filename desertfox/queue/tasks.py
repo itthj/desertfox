@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from desertfox.queue.celery_app import celery_app
 from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.config import EngineConfig
+from desertfox.ingestion.seed_manager import SeedScheduleRegistry, SeedHubManager
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,105 @@ def bulk_crawl_urls_task(
         }
     except Exception as e:
         logger.exception("Error executing bulk crawl task %s: %s", self.request.id, e)
+        return {
+            "task_id": self.request.id,
+            "status": "error",
+            "error": str(e)
+        }
+
+
+@celery_app.task(bind=True, name="desertfox.run_scheduled_crawl_sweep")
+def run_scheduled_crawl_sweep(self) -> Dict[str, Any]:
+    """
+    Automated continuous crawl sweep executed by Celery Beat scheduler.
+    Inspects persistent schedules, extracts due targets, crawls images,
+    extracts faces, and updates index.
+    """
+    logger.info("Executing scheduled continuous crawl sweep [task %s]", self.request.id)
+    self.update_state(state="PROGRESS", meta={"step": "evaluating_due_schedules"})
+
+    registry = SeedScheduleRegistry()
+    due_schedules = registry.get_due_schedules()
+    logger.info("Found %d schedules due for indexing", len(due_schedules))
+
+    if not due_schedules:
+        return {
+            "task_id": self.request.id,
+            "status": "idle",
+            "message": "No continuous schedules currently due for crawling.",
+            "total_schedules_checked": len(registry.schedules)
+        }
+
+    engine = get_worker_engine()
+    sweep_results = []
+    total_new_faces = 0
+
+    for item in due_schedules:
+        sched_id = item["id"]
+        t_type = item.get("target_type", "url")
+        target = item["target"]
+        max_imgs = item.get("max_images", 15)
+
+        targets_to_crawl = []
+        if t_type == "bundle":
+            targets_to_crawl = SeedHubManager.get_bundle_urls(target)
+        elif t_type == "sitemap":
+            targets_to_crawl = SeedHubManager.parse_sitemap_urls(target, max_urls=30)
+        else:
+            targets_to_crawl = [target]
+
+        try:
+            res = engine.bulk_crawl_urls(urls=targets_to_crawl, max_images_per_url=max_imgs)
+            indexed_count = res.get("total_images_indexed", 0)
+            total_new_faces += indexed_count
+            registry.record_run(sched_id, new_faces=indexed_count)
+            sweep_results.append({
+                "schedule_id": sched_id,
+                "name": item.get("name", target),
+                "target_type": t_type,
+                "targets_crawled": len(targets_to_crawl),
+                "faces_indexed": indexed_count,
+                "status": "success"
+            })
+        except Exception as e:
+            logger.warning("Failed executing scheduled sweep for %s: %s", sched_id, e)
+            sweep_results.append({
+                "schedule_id": sched_id,
+                "name": item.get("name", target),
+                "status": "error",
+                "error": str(e)
+            })
+
+    return {
+        "task_id": self.request.id,
+        "status": "complete",
+        "schedules_processed": len(due_schedules),
+        "total_new_faces_indexed": total_new_faces,
+        "details": sweep_results
+    }
+
+
+@celery_app.task(bind=True, name="desertfox.optimize_and_compact_index")
+def optimize_and_compact_index(self) -> Dict[str, Any]:
+    """
+    Periodic index compaction and partition re-building executed by Celery Beat.
+    Re-clusters Voronoi cells, syncs FAISS indices, and saves persistent snapshots.
+    """
+    logger.info("Executing periodic index optimization & compaction [task %s]", self.request.id)
+    try:
+        engine = get_worker_engine()
+        engine.partitioned_index.build_partitions()
+        engine.save_index()
+        total_vectors = len(engine.vector_store.records)
+        return {
+            "task_id": self.request.id,
+            "status": "success",
+            "total_vectors_indexed": total_vectors,
+            "faiss_enabled": engine.config.use_faiss,
+            "message": "Index partitions optimized and snapshot persisted."
+        }
+    except Exception as e:
+        logger.exception("Error during index optimization: %s", e)
         return {
             "task_id": self.request.id,
             "status": "error",

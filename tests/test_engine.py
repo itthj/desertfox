@@ -722,5 +722,74 @@ class TestDesertFoxV2(unittest.TestCase):
             self.assertEqual(bulk_res["targets_processed"], 2)
             self.assertEqual(bulk_res["total_images_indexed"], 4)
 
+    def test_seed_schedule_registry(self):
+        """Verify SeedScheduleRegistry persistence, due computation, and lifecycle."""
+        import tempfile
+        from desertfox.ingestion.seed_manager import SeedScheduleRegistry
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = os.path.join(tmpdir, "sched.json")
+            reg = SeedScheduleRegistry(store_path=store)
+            self.assertGreaterEqual(len(reg.schedules), 3)
+
+            # Register custom schedule
+            entry = reg.register("https://cs.stanford.edu/faculty", target_type="url", name="Stanford", interval_hours=1)
+            sched_id = entry["id"]
+            self.assertIn(sched_id, reg.schedules)
+
+            # Check due schedules (newly created has never run, so it's due)
+            due = reg.get_due_schedules()
+            self.assertTrue(any(d["id"] == sched_id for d in due))
+
+            # Record run
+            reg.record_run(sched_id, new_faces=5)
+            self.assertEqual(reg.schedules[sched_id]["last_faces_indexed"], 5)
+            self.assertEqual(reg.schedules[sched_id]["total_faces_indexed"], 5)
+
+            # Toggle pause
+            reg.toggle(sched_id)
+            self.assertEqual(reg.schedules[sched_id]["status"], "paused")
+            due_after_pause = reg.get_due_schedules()
+            self.assertFalse(any(d["id"] == sched_id for d in due_after_pause))
+
+            # Delete
+            self.assertTrue(reg.delete(sched_id))
+            self.assertNotIn(sched_id, reg.schedules)
+
+    def test_scheduler_api_and_tasks(self):
+        """Verify FastAPI scheduler endpoints and Celery Beat periodic task integration."""
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.queue import tasks
+
+        client = TestClient(server.app)
+        res = client.get("/api/scheduler/schedules")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("schedules", res.json())
+
+        # Register new schedule via API
+        reg_res = client.post("/api/scheduler/register", json={
+            "target": "https://test.edu/staff",
+            "target_type": "url",
+            "name": "Test Staff",
+            "interval_hours": 24,
+            "max_images": 10
+        })
+        self.assertEqual(reg_res.status_code, 200)
+        sched_id = reg_res.json()["schedule"]["id"]
+
+        # Toggle
+        tog_res = client.post(f"/api/scheduler/toggle/{sched_id}")
+        self.assertEqual(tog_res.status_code, 200)
+        self.assertEqual(tog_res.json()["schedule"]["status"], "paused")
+
+        # Delete
+        del_res = client.delete(f"/api/scheduler/schedules/{sched_id}")
+        self.assertEqual(del_res.status_code, 200)
+
+        # Verify optimization task execution directly
+        opt_res = tasks.optimize_and_compact_index.apply()
+        self.assertEqual(opt_res.result["status"], "success")
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,8 @@ from desertfox.privacy.enrollment import FaceEnrollment
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.search_aggregator import SearchAggregator
+from desertfox.ingestion.dorker import OSINTDorker
+from desertfox.ingestion.seed_manager import SeedHubManager
 from desertfox.ingestion.metadata import ForensicMetadataExtractor
 from desertfox.ingestion.site_crawler import SiteCrawler
 from desertfox.config import EngineConfig
@@ -490,6 +492,145 @@ class DesertFoxEngine:
             "candidates_found": len(candidates),
             "newly_indexed_images": indexed_count,
             "items": indexed_items
+        }
+
+    def dork_and_index_query(
+        self,
+        query: str,
+        categories: Optional[List[str]] = None,
+        max_per_dork: int = 15,
+        max_dorks: int = 8
+    ) -> Dict[str, Any]:
+        """
+        Executes automated platform dorking across targeted identity networks
+        (social, corporate, academic, speaker directories) and indexes discovered faces.
+        """
+        dorks = OSINTDorker.generate_dorks(query, categories=categories, max_dorks=max_dorks)
+        total_indexed = 0
+        total_candidates = 0
+        dork_reports = []
+        all_indexed_items = []
+
+        for d in dorks:
+            dork_str = d["dork"]
+            category = d["category"]
+            candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork)
+            total_candidates += len(candidates)
+            dork_indexed = 0
+
+            for idx, item in enumerate(candidates):
+                img_url = item["image_url"]
+                source_page = item["source_page_url"]
+                media = self.harvester.fetch_and_validate_media(img_url)
+                if not media:
+                    continue
+
+                rec_id = f"dork_{category}_{media['fingerprint']['dhash'][:8]}_{len(all_indexed_items)}"
+                meta = {
+                    "source_domain": item["domain"],
+                    "source_page": source_page,
+                    "search_query": query,
+                    "dork": dork_str,
+                    "category": category,
+                    "title": item["title"],
+                    "engine": item["engine"],
+                    "forensics": media.get("forensics", {})
+                }
+
+                res = self.process_and_index_image(
+                    image=media["image"],
+                    record_id=rec_id,
+                    source_url=source_page,
+                    metadata=meta,
+                    enforce_fiqa=False
+                )
+
+                if res.get("success"):
+                    dork_indexed += 1
+                    total_indexed += 1
+                    indexed_info = {
+                        "record_id": rec_id,
+                        "image_url": img_url,
+                        "source_page": source_page,
+                        "title": item["title"],
+                        "category": category,
+                        "domain": item["domain"]
+                    }
+                    all_indexed_items.append(indexed_info)
+
+            dork_reports.append({
+                "category": category,
+                "dork": dork_str,
+                "candidates_found": len(candidates),
+                "indexed_faces": dork_indexed
+            })
+
+        if total_indexed > 0:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        return {
+            "status": "success",
+            "query": query,
+            "dorks_executed": len(dorks),
+            "total_candidates_found": total_candidates,
+            "newly_indexed_images": total_indexed,
+            "dork_reports": dork_reports,
+            "items": all_indexed_items
+        }
+
+    def bulk_crawl_urls(
+        self,
+        urls: List[str],
+        max_images_per_url: int = 15,
+        use_async: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Batch crawls multiple URLs or parsed XML sitemaps, extracting and indexing faces.
+        """
+        resolved_urls = []
+        for u in urls:
+            u_clean = u.strip()
+            if not u_clean:
+                continue
+            if u_clean.endswith(".xml") or "sitemap" in u_clean.lower():
+                sitemap_pages = SeedHubManager.parse_sitemap_urls(u_clean, max_urls=30)
+                resolved_urls.extend(sitemap_pages)
+            else:
+                resolved_urls.append(u_clean)
+
+        unique_urls = list(dict.fromkeys(resolved_urls))
+        total_indexed = 0
+        details = []
+
+        for target_url in unique_urls:
+            try:
+                res = self.crawl_and_index_target(
+                    target_url=target_url,
+                    max_images=max_images_per_url,
+                    use_async=use_async
+                )
+                newly_indexed = res.get("newly_indexed_images", 0)
+                total_indexed += newly_indexed
+                details.append({
+                    "url": target_url,
+                    "status": "success",
+                    "candidates_found": res.get("candidates_found", 0),
+                    "newly_indexed": newly_indexed
+                })
+            except Exception as e:
+                logger.warning("Error crawling URL %s: %s", target_url, e)
+                details.append({
+                    "url": target_url,
+                    "status": "error",
+                    "error": str(e)
+                })
+
+        return {
+            "status": "success",
+            "targets_processed": len(unique_urls),
+            "total_images_indexed": total_indexed,
+            "details": details
         }
 
     def find_perceptual_duplicates(self, image: Image.Image, max_distance: int = 5) -> List[Tuple[str, int, Dict[str, Any]]]:

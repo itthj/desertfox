@@ -622,5 +622,105 @@ class TestDesertFoxV2(unittest.TestCase):
         urls = [r["image_url"] for r in results]
         self.assertEqual(urls.count("https://img.example/shared.jpg"), 1)
 
+    def test_osint_dorker_generation(self):
+        """Verify OSINTDorker constructs structured dorks across categories."""
+        from desertfox.ingestion.dorker import OSINTDorker
+
+        dorks_all = OSINTDorker.generate_dorks("Alice Smith", max_dorks=10)
+        self.assertGreaterEqual(len(dorks_all), 4)
+        for d in dorks_all:
+            self.assertIn("category", d)
+            self.assertIn("dork", d)
+            self.assertIn("Alice Smith", d["dork"])
+
+        social_dorks = OSINTDorker.generate_dorks("Alice Smith", categories=["social"], max_dorks=5)
+        self.assertTrue(all(d["category"] == "social" for d in social_dorks))
+
+    def test_seed_manager_utilities(self):
+        """Verify SeedHubManager bundle retrieval, text URL parsing, and sitemap extraction."""
+        from unittest.mock import patch, MagicMock
+        from desertfox.ingestion.seed_manager import SeedHubManager
+
+        # Test bundle URLs
+        tech_urls = SeedHubManager.get_bundle_urls("tech_execs")
+        self.assertGreater(len(tech_urls), 3)
+        self.assertIn("https://about.meta.com/company-info/", tech_urls)
+
+        empty = SeedHubManager.get_bundle_urls("nonexistent_bundle")
+        self.assertEqual(empty, [])
+
+        # Test URL extraction from messy text / CSV
+        raw = """
+        Here is a list of targets:
+        https://target1.example.org/about,
+        https://target2.example.org/team.
+        Some other text without links
+        https://target1.example.org/about
+        """
+        extracted = SeedHubManager.extract_urls_from_text(raw)
+        self.assertEqual(extracted, ["https://target1.example.org/about", "https://target2.example.org/team"])
+
+        # Test sitemap XML parsing
+        sitemap_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url><loc>https://company.org/products</loc></url>
+            <url><loc>https://company.org/team-leadership</loc></url>
+            <url><loc>https://company.org/about-people</loc></url>
+        </urlset>
+        """
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.content = sitemap_xml
+
+        with patch("requests.get", return_value=mock_resp):
+            urls = SeedHubManager.parse_sitemap_urls("https://company.org/sitemap.xml", max_urls=5)
+            self.assertEqual(len(urls), 3)
+            # Team/people URLs are prioritized
+            self.assertIn("team-leadership", urls[0])
+
+    def test_engine_dork_and_bulk_crawl(self):
+        """Verify DesertFoxEngine platform dorking and bulk URL crawling workflows."""
+        import tempfile
+        from desertfox.config import EngineConfig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "dork.index"), use_faiss=False)
+            engine = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+
+            # Mock search aggregator and harvester
+            engine.search_aggregator.aggregate_search = lambda q, max_total=15: [
+                {
+                    "image_url": "https://img.example/person.jpg",
+                    "source_page_url": "https://site.example/page",
+                    "title": "Jane Doe Profile",
+                    "domain": "site.example",
+                    "engine": "Bing"
+                }
+            ]
+
+            img = Image.new("RGB", (100, 100), color=(120, 140, 160))
+            engine.harvester.fetch_and_validate_media = lambda u: {
+                "image": img,
+                "fingerprint": {"dhash": "0123456789abcdef"},
+                "forensics": {}
+            }
+
+            dork_res = engine.dork_and_index_query("Jane Doe", categories=["social"], max_dorks=1)
+            self.assertEqual(dork_res["status"], "success")
+            self.assertEqual(dork_res["dorks_executed"], 1)
+            self.assertGreaterEqual(dork_res["newly_indexed_images"], 1)
+
+            # Test bulk crawl
+            engine.crawl_and_index_target = lambda target_url, max_images=15, use_async=True: {
+                "status": "success",
+                "candidates_found": 5,
+                "newly_indexed_images": 2
+            }
+
+            bulk_res = engine.bulk_crawl_urls(["https://univ1.edu/team", "https://univ2.edu/staff"])
+            self.assertEqual(bulk_res["status"], "success")
+            self.assertEqual(bulk_res["targets_processed"], 2)
+            self.assertEqual(bulk_res["total_images_indexed"], 4)
+
 if __name__ == "__main__":
     unittest.main()

@@ -134,3 +134,75 @@ def search_and_index_task(
             "query": query,
             "error": str(e)
         }
+
+
+@celery_app.task(bind=True, name="desertfox.dork_and_index")
+def dork_and_index_task(
+    self,
+    query: str,
+    categories: Optional[List[str]] = None,
+    max_per_dork: int = 15,
+    max_dorks: int = 8
+) -> Dict[str, Any]:
+    """
+    Background worker task to run multi-platform OSINT dorking for an identity,
+    crawl matching candidate image results, and index faces.
+    """
+    logger.info("Starting distributed dorking task %s for query: %s", self.request.id, query)
+    self.update_state(state="PROGRESS", meta={"step": "dorking", "query": query})
+    try:
+        engine = get_worker_engine()
+        result = engine.dork_and_index_query(
+            query=query,
+            categories=categories,
+            max_per_dork=max_per_dork,
+            max_dorks=max_dorks
+        )
+        return {
+            "task_id": self.request.id,
+            "status": "success",
+            "query": query,
+            "dorks_executed": result.get("dorks_executed", 0),
+            "total_candidates_found": result.get("total_candidates_found", 0),
+            "newly_indexed_images": result.get("newly_indexed_images", 0),
+            "dork_reports": result.get("dork_reports", []),
+            "items": result.get("items", [])
+        }
+    except Exception as e:
+        logger.exception("Error executing dork task %s: %s", self.request.id, e)
+        return {
+            "task_id": self.request.id,
+            "status": "error",
+            "query": query,
+            "error": str(e)
+        }
+
+
+@celery_app.task(bind=True, name="desertfox.bulk_crawl_urls")
+def bulk_crawl_urls_task(
+    self,
+    urls: List[str],
+    max_images_per_url: int = 15
+) -> Dict[str, Any]:
+    """
+    Background worker task to batch crawl hundreds of target URLs or sitemaps.
+    """
+    logger.info("Starting bulk crawl task %s for %d URLs", self.request.id, len(urls))
+    self.update_state(state="PROGRESS", meta={"step": "bulk_crawling", "total": len(urls)})
+    try:
+        engine = get_worker_engine()
+        result = engine.bulk_crawl_urls(urls=urls, max_images_per_url=max_images_per_url)
+        return {
+            "task_id": self.request.id,
+            "status": "success",
+            "targets_processed": result.get("targets_processed", 0),
+            "total_images_indexed": result.get("total_images_indexed", 0),
+            "details": result.get("details", [])
+        }
+    except Exception as e:
+        logger.exception("Error executing bulk crawl task %s: %s", self.request.id, e)
+        return {
+            "task_id": self.request.id,
+            "status": "error",
+            "error": str(e)
+        }

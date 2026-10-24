@@ -20,6 +20,8 @@ from desertfox.security import (
 )
 from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.privacy.takedown import TakedownNoticeGenerator
+from desertfox.ingestion.seed_manager import SeedHubManager
+from desertfox.ingestion.dorker import OSINTDorker
 
 app = FastAPI(
     title="DesertFox OSINT & Exposure Engine",
@@ -58,6 +60,19 @@ class SearchHarvestRequest(BaseModel):
     query: str = Field(..., description="Target name, username, or identity to search across public web engines")
     max_results: int = Field(25, ge=5, le=100)
     engines: Optional[List[str]] = Field(default=["duckduckgo", "bing"], description="Search engines to query")
+
+class DorkHarvestRequest(BaseModel):
+    query: str = Field(..., description="Target name or identifier for OSINT dorking")
+    categories: Optional[List[str]] = Field(None, description="Platform categories: 'social', 'corporate', 'academic', 'speakers'")
+    max_per_dork: int = Field(15, ge=1, le=50)
+    max_dorks: int = Field(8, ge=1, le=20)
+
+class BulkCrawlRequest(BaseModel):
+    urls: Optional[List[str]] = Field(None, description="Direct list of target URLs")
+    raw_text: Optional[str] = Field(None, description="Raw text, CSV, or line-separated URLs to parse")
+    sitemap_url: Optional[str] = Field(None, description="XML Sitemap URL")
+    bundle_id: Optional[str] = Field(None, description="Curated bundle ID ('tech_execs', 'academic_rosters', 'open_contributors')")
+    max_images_per_url: int = Field(15, ge=1, le=50)
 
 class OptOutRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image to exclude permanently")
@@ -252,6 +267,121 @@ def enqueue_search_harvest_job(req: SearchHarvestRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue search harvest task: {str(e)}")
+
+
+@app.post("/api/search/dork-harvest")
+def dork_harvest_query(req: DorkHarvestRequest):
+    """
+    Executes automated platform dorking across targeted identity networks
+    (social networks, corporate directories, academic rosters, speakers)
+    and indexes all matching discovered portraits.
+    """
+    try:
+        res = engine.dork_and_index_query(
+            query=req.query,
+            categories=req.categories,
+            max_per_dork=req.max_per_dork,
+            max_dorks=req.max_dorks
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Platform dorking harvest failed: {str(e)}")
+
+
+@app.post("/api/queue/dork-harvest")
+def enqueue_dork_harvest_job(req: DorkHarvestRequest):
+    """Dispatches a background platform dorking harvest to the Celery worker queue."""
+    try:
+        from desertfox.queue.tasks import dork_and_index_task
+        task = dork_and_index_task.delay(
+            query=req.query,
+            categories=req.categories,
+            max_per_dork=req.max_per_dork,
+            max_dorks=req.max_dorks
+        )
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "query": req.query,
+            "message": f"Platform dorking task for '{req.query}' dispatched to Celery worker queue"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue dork harvest task: {str(e)}")
+
+
+@app.get("/api/seeds/bundles")
+def list_seed_bundles():
+    """Lists pre-configured curated seed directories available for wide-spectrum indexing."""
+    return {
+        "status": "success",
+        "bundles": SeedHubManager.CURATED_BUNDLES
+    }
+
+
+@app.post("/api/seeds/bulk-crawl")
+def bulk_crawl_seeds(req: BulkCrawlRequest):
+    """
+    Ingests and crawls bulk targets from URL lists, raw text/CSV, XML sitemaps, or curated bundles.
+    """
+    try:
+        targets: List[str] = []
+        if req.bundle_id:
+            targets.extend(SeedHubManager.get_bundle_urls(req.bundle_id))
+        if req.urls:
+            targets.extend(req.urls)
+        if req.raw_text:
+            targets.extend(SeedHubManager.extract_urls_from_text(req.raw_text))
+        if req.sitemap_url:
+            targets.extend(SeedHubManager.parse_sitemap_urls(req.sitemap_url))
+
+        targets = list(dict.fromkeys(t.strip() for t in targets if t.strip()))
+        if not targets:
+            raise HTTPException(status_code=400, detail="No valid target URLs provided or resolved.")
+
+        res = engine.bulk_crawl_urls(
+            urls=targets,
+            max_images_per_url=req.max_images_per_url
+        )
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Bulk crawl execution failed: {str(e)}")
+
+
+@app.post("/api/queue/bulk-crawl")
+def enqueue_bulk_crawl_job(req: BulkCrawlRequest):
+    """Dispatches bulk URL crawl to the Celery worker queue."""
+    try:
+        targets: List[str] = []
+        if req.bundle_id:
+            targets.extend(SeedHubManager.get_bundle_urls(req.bundle_id))
+        if req.urls:
+            targets.extend(req.urls)
+        if req.raw_text:
+            targets.extend(SeedHubManager.extract_urls_from_text(req.raw_text))
+        if req.sitemap_url:
+            targets.extend(SeedHubManager.parse_sitemap_urls(req.sitemap_url))
+
+        targets = list(dict.fromkeys(t.strip() for t in targets if t.strip()))
+        if not targets:
+            raise HTTPException(status_code=400, detail="No valid target URLs provided or resolved.")
+
+        from desertfox.queue.tasks import bulk_crawl_urls_task
+        task = bulk_crawl_urls_task.delay(
+            urls=targets,
+            max_images_per_url=req.max_images_per_url
+        )
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "targets_count": len(targets),
+            "message": f"Bulk crawl task with {len(targets)} targets dispatched to Celery worker queue"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to queue bulk crawl task: {str(e)}")
 
 
 @app.post("/api/opt-out")

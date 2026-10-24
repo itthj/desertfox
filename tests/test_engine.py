@@ -519,7 +519,9 @@ class TestDesertFoxV2(unittest.TestCase):
             return f"data:image/png;base64,{encoded}"
 
         previous = server.engine.enrollment
+        prev_identity = getattr(server.engine.embedder, "verifies_identity", False)
         try:
+            server.engine.embedder.verifies_identity = False
             with tempfile.TemporaryDirectory() as tmpdir:
                 server.engine.enrollment = FaceEnrollment(os.path.join(tmpdir, "face.npy"), match_threshold=0.55)
                 client = TestClient(server.app)
@@ -537,6 +539,7 @@ class TestDesertFoxV2(unittest.TestCase):
                 self.assertFalse(repeat.json()["enrollment"]["created"])
         finally:
             server.engine.enrollment = previous
+            server.engine.embedder.verifies_identity = prev_identity
 
     def test_audit_refuses_to_run_without_an_enrolled_face(self):
         """A searcher-only audit does not fetch a site until the enrolled face can be filtered."""

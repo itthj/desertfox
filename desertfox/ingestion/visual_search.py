@@ -269,10 +269,11 @@ class VisualSearchHarvester:
 
     def discover_from_probe(
         self,
-        image: Image.Image,
+        image: Optional[Image.Image] = None,
         query_hint: str = "",
         max_results: int = 60,
         search_aggregator: Optional[SearchAggregator] = None,
+        probe_image: Optional[Image.Image] = None,
     ) -> Dict[str, Any]:
         """
         Combined Visual + Entity OSINT Discovery:
@@ -281,12 +282,15 @@ class VisualSearchHarvester:
            multi-engine text/portrait search in parallel.
         3. Returns deduplicated candidates with fast CDN thumbnails ready for parallel indexing.
         """
+        target_img = probe_image if probe_image is not None else image
+        if target_img is None:
+            return {"candidates": [], "detected_tags": [], "cbir_id": "", "provider_counts": {}}
         aggregator = search_aggregator or SearchAggregator()
         hint = (query_hint or "").strip()
 
         with ThreadPoolExecutor(max_workers=3) as pool:
-            f_yandex = pool.submit(self.search_yandex_visual, image, max_results)
-            f_bing = pool.submit(self.search_bing_visual, image, max(20, max_results // 2))
+            f_yandex = pool.submit(self.search_yandex_visual, target_img, max_results)
+            f_bing = pool.submit(self.search_bing_visual, target_img, max(20, max_results // 2))
             f_text = (
                 pool.submit(aggregator.aggregate_search, hint, max_results)
                 if hint

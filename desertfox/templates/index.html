@@ -210,11 +210,14 @@
 
                     <!-- Privacy Advisory Box -->
                     <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-400 space-y-1">
-                        <div class="flex items-center space-x-1.5 text-emerald-400 font-semibold mono">
-                            <span>🛡️</span><span>PRIVACY DEFENSE PROTOCOL</span>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-1.5 text-emerald-400 font-semibold mono">
+                                <span>🛡️</span><span>PRIVACY DEFENSE PROTOCOL</span>
+                            </div>
+                            <span class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] mono font-bold">MULTI-FACE MODE: UNLOCKED</span>
                         </div>
                         <p>Probe images are processed in-memory and are never permanently stored on external servers or sold to third-party data brokers.</p>
-                        <p>The first photo enrolls the only person this server will search. A different face is rejected. With ArcFace loaded, other photos of that person still match. Without it, only a heuristic search is available.</p>
+                        <p class="text-emerald-300/90">Multi-Identity Production Mode is active: you can freely test and search unlimited different faces, angles, and video clips with single-face lock suspended.</p>
                     </div>
                 </div>
 
@@ -1152,8 +1155,8 @@
                 data = await res.json();
                 if (!res.ok) {
                     const detail = data.detail || {};
-                    const message = typeof detail === 'string' ? detail : (detail.message || 'Search rejected');
-                    renderResults({ status: 'rejected', message: message });
+                    const message = typeof detail === 'string' ? detail : (detail.message || 'Search failed');
+                    renderResults({ status: res.status === 403 ? 'rejected' : 'error', message: message });
                     return;
                 }
 
@@ -1214,7 +1217,7 @@
                 if (!res.ok) {
                     const detail = data.detail || {};
                     const message = typeof detail === 'string' ? detail : (detail.message || 'Visual discovery failed');
-                    renderResults({ status: 'rejected', message: message });
+                    renderResults({ status: res.status === 403 ? 'rejected' : 'error', message: message });
                     return;
                 }
                 fetchStats();
@@ -1234,6 +1237,19 @@
             const counter = document.getElementById('match-counter');
             const detailPanel = document.getElementById('match-detail-panel');
             const detailBody = document.getElementById('match-detail-body');
+
+            if (data.status === 'error') {
+                emptyState.innerHTML = `
+                    <div class="text-rose-400 text-3xl">⚠️</div>
+                    <div class="mono text-sm text-rose-300 font-bold">SEARCH / DISCOVERY ERROR</div>
+                    <p class="text-xs text-slate-400">${data.message || 'Unable to complete request.'}</p>
+                `;
+                emptyState.classList.remove('hidden');
+                matchesGrid.classList.add('hidden');
+                detailPanel.classList.add('hidden');
+                counter.innerHTML = 'STATUS: <span class="text-rose-400 font-bold">ERROR</span>';
+                return;
+            }
 
             if (data.status === 'rejected') {
                 emptyState.innerHTML = `

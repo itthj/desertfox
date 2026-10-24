@@ -499,7 +499,7 @@ class DesertFoxEngine:
     def harvest_and_index_query(
         self,
         query: str,
-        max_results: int = 30,
+        max_results: int = 50,
         engines: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
@@ -510,8 +510,11 @@ class DesertFoxEngine:
         candidates = self.search_aggregator.aggregate_search(query, max_total=max_results, engines=engines)
         indexed_count = 0
         indexed_items = []
+        engine_breakdown: Dict[str, int] = {}
 
         for idx, item in enumerate(candidates):
+            eng_name = item.get("engine", "Unknown")
+            engine_breakdown[eng_name] = engine_breakdown.get(eng_name, 0) + 1
             img_url = item["image_url"]
             source_page = item["source_page_url"]
             media = self.harvester.fetch_and_validate_media(img_url)
@@ -524,7 +527,7 @@ class DesertFoxEngine:
                 "source_page": source_page,
                 "search_query": query,
                 "title": item["title"],
-                "engine": item["engine"],
+                "engine": eng_name,
                 "forensics": media.get("forensics", {})
             }
 
@@ -543,7 +546,8 @@ class DesertFoxEngine:
                     "image_url": img_url,
                     "source_page": source_page,
                     "title": item["title"],
-                    "domain": item["domain"]
+                    "domain": item["domain"],
+                    "engine": eng_name,
                 })
 
         if indexed_count > 0:
@@ -554,6 +558,7 @@ class DesertFoxEngine:
             "status": "success",
             "query": query,
             "candidates_found": len(candidates),
+            "engine_breakdown": engine_breakdown,
             "newly_indexed_images": indexed_count,
             "items": indexed_items
         }
@@ -562,12 +567,14 @@ class DesertFoxEngine:
         self,
         query: str,
         categories: Optional[List[str]] = None,
-        max_per_dork: int = 15,
-        max_dorks: int = 8
+        max_per_dork: int = 20,
+        max_dorks: int = 16,
+        engines: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Executes automated platform dorking across targeted identity networks
-        (social, corporate, academic, speaker directories) and indexes discovered faces.
+        (social, corporate, academic, speakers, news_media, developer_tech,
+        public_records, visual_portfolios) and indexes discovered faces.
         """
         dorks = OSINTDorker.generate_dorks(query, categories=categories, max_dorks=max_dorks)
         total_indexed = 0
@@ -578,7 +585,10 @@ class DesertFoxEngine:
         for d in dorks:
             dork_str = d["dork"]
             category = d["category"]
-            candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork)
+            if engines is not None:
+                candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork, engines=engines)
+            else:
+                candidates = self.search_aggregator.aggregate_search(dork_str, max_total=max_per_dork)
             total_candidates += len(candidates)
             dork_indexed = 0
 
@@ -618,7 +628,8 @@ class DesertFoxEngine:
                         "source_page": source_page,
                         "title": item["title"],
                         "category": category,
-                        "domain": item["domain"]
+                        "domain": item["domain"],
+                        "engine": item.get("engine", "Unknown"),
                     }
                     all_indexed_items.append(indexed_info)
 
@@ -657,8 +668,8 @@ class DesertFoxEngine:
             u_clean = u.strip()
             if not u_clean:
                 continue
-            if u_clean.endswith(".xml") or "sitemap" in u_clean.lower():
-                sitemap_pages = SeedHubManager.parse_sitemap_urls(u_clean, max_urls=30)
+            if u_clean.endswith(".xml") or u_clean.endswith(".xml.gz") or "sitemap" in u_clean.lower():
+                sitemap_pages = SeedHubManager.parse_sitemap_urls(u_clean, max_urls=100)
                 resolved_urls.extend(sitemap_pages)
             else:
                 resolved_urls.append(u_clean)

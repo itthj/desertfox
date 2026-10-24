@@ -63,21 +63,28 @@ class AuditRequest(BaseModel):
 
 class SearchHarvestRequest(BaseModel):
     query: str = Field(..., description="Target name, username, or identity to search across public web engines")
-    max_results: int = Field(25, ge=5, le=100)
-    engines: Optional[List[str]] = Field(default=["duckduckgo", "bing"], description="Search engines to query")
+    max_results: int = Field(60, ge=5, le=250)
+    engines: Optional[List[str]] = Field(
+        default=["duckduckgo", "bing", "google", "brave", "yandex", "wikimedia"],
+        description="Search engines to query"
+    )
 
 class DorkHarvestRequest(BaseModel):
     query: str = Field(..., description="Target name or identifier for OSINT dorking")
-    categories: Optional[List[str]] = Field(None, description="Platform categories: 'social', 'corporate', 'academic', 'speakers'")
-    max_per_dork: int = Field(15, ge=1, le=50)
-    max_dorks: int = Field(8, ge=1, le=20)
+    categories: Optional[List[str]] = Field(
+        None,
+        description="Platform categories: 'social', 'corporate', 'academic', 'speakers', 'news_media', 'developer_tech', 'public_records', 'visual_portfolios'"
+    )
+    max_per_dork: int = Field(20, ge=1, le=100)
+    max_dorks: int = Field(16, ge=1, le=60)
+    engines: Optional[List[str]] = Field(None, description="Optional search engines override for dork execution")
 
 class BulkCrawlRequest(BaseModel):
     urls: Optional[List[str]] = Field(None, description="Direct list of target URLs")
     raw_text: Optional[str] = Field(None, description="Raw text, CSV, or line-separated URLs to parse")
     sitemap_url: Optional[str] = Field(None, description="XML Sitemap URL")
-    bundle_id: Optional[str] = Field(None, description="Curated bundle ID ('tech_execs', 'academic_rosters', 'open_contributors')")
-    max_images_per_url: int = Field(15, ge=1, le=50)
+    bundle_id: Optional[str] = Field(None, description="Curated bundle ID or 'all'")
+    max_images_per_url: int = Field(15, ge=1, le=100)
 
 class ScheduleRegisterRequest(BaseModel):
     target: str = Field(..., description="Target URL, XML sitemap, or bundle ID")
@@ -318,11 +325,23 @@ def enqueue_search_harvest_job(req: SearchHarvestRequest):
         raise HTTPException(status_code=500, detail=f"Failed to queue search harvest task: {str(e)}")
 
 
+@app.get("/api/search/providers")
+def list_search_providers():
+    """Returns supported search providers, OSINT dorking categories, and seed bundle counts."""
+    from desertfox.ingestion.search_aggregator import SearchAggregator
+    return {
+        "status": "success",
+        "providers": SearchAggregator.SUPPORTED_ENGINES,
+        "dork_summary": OSINTDorker.get_summary(),
+        "seed_catalog": SeedHubManager.get_catalog_summary(),
+    }
+
+
 @app.post("/api/search/dork-harvest")
 def dork_harvest_query(req: DorkHarvestRequest):
     """
     Executes automated platform dorking across targeted identity networks
-    (social networks, corporate directories, academic rosters, speakers)
+    (social networks, corporate directories, academic rosters, speakers, press, tech, records, portfolios)
     and indexes all matching discovered portraits.
     """
     try:
@@ -330,7 +349,8 @@ def dork_harvest_query(req: DorkHarvestRequest):
             query=req.query,
             categories=req.categories,
             max_per_dork=req.max_per_dork,
-            max_dorks=req.max_dorks
+            max_dorks=req.max_dorks,
+            engines=req.engines
         )
         return res
     except Exception as e:
@@ -361,8 +381,11 @@ def enqueue_dork_harvest_job(req: DorkHarvestRequest):
 @app.get("/api/seeds/bundles")
 def list_seed_bundles():
     """Lists pre-configured curated seed directories available for wide-spectrum indexing."""
+    catalog = SeedHubManager.get_catalog_summary()
     return {
         "status": "success",
+        "total_bundles": catalog["total_bundles"],
+        "total_curated_urls": catalog["total_curated_urls"],
         "bundles": SeedHubManager.CURATED_BUNDLES
     }
 

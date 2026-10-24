@@ -605,7 +605,7 @@ class TestDesertFoxV2(unittest.TestCase):
             self.assertEqual([record["record_id"] for record in engine.vector_store.records], ["searcher"])
 
     def test_search_aggregator_candidate_extraction(self):
-        """Verify SearchAggregator aggregates and deduplicates search candidate items."""
+        """Verify SearchAggregator aggregates and deduplicates search candidate items across all 6 providers."""
         from desertfox.ingestion.search_aggregator import SearchAggregator
         sa = SearchAggregator()
         # Mocking individual engines to verify aggregation logic without live network dependency
@@ -617,17 +617,107 @@ class TestDesertFoxV2(unittest.TestCase):
             {"image_url": "https://img.example/shared.jpg", "source_page_url": "https://site.example/shared", "title": "Person Shared", "domain": "site.example", "engine": "Bing"},
             {"image_url": "https://img.example/2.jpg", "source_page_url": "https://site.example/2", "title": "Person 2", "domain": "site.example", "engine": "Bing"}
         ]
+        sa.search_google_images = lambda q, max_results=35: [
+            {"image_url": "https://img.example/3.jpg", "source_page_url": "https://site.example/3", "title": "Person 3", "domain": "site.example", "engine": "Google"}
+        ]
+        sa.search_brave_images = lambda q, max_results=35: [
+            {"image_url": "https://img.example/4.jpg", "source_page_url": "https://site.example/4", "title": "Person 4", "domain": "site.example", "engine": "Brave"}
+        ]
+        sa.search_yandex_images = lambda q, max_results=35: [
+            {"image_url": "https://img.example/5.jpg", "source_page_url": "https://site.example/5", "title": "Person 5", "domain": "site.example", "engine": "Yandex"}
+        ]
+        sa.search_wikimedia_portraits = lambda q, max_results=35: [
+            {"image_url": "https://img.example/6.jpg", "source_page_url": "https://commons.wikimedia.org/6", "title": "Person 6", "domain": "commons.wikimedia.org", "engine": "Wikimedia"}
+        ]
         results = sa.aggregate_search("test person", max_total=10)
-        self.assertEqual(len(results), 3)  # Deduplicated from 4 items
+        self.assertEqual(len(results), 7)  # Deduplicated from 8 items across 6 engines
         urls = [r["image_url"] for r in results]
         self.assertEqual(urls.count("https://img.example/shared.jpg"), 1)
 
+        # Subset engines test
+        subset = sa.aggregate_search("test person", max_total=10, engines=["duckduckgo", "bing"])
+        self.assertEqual(len(subset), 3)
+
+    def test_multi_provider_parsers_and_api(self):
+        """Verify Google, Brave, Yandex, and Wikimedia parsers and /api/search/providers endpoint."""
+        from unittest.mock import patch, MagicMock
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.ingestion.search_aggregator import SearchAggregator
+
+        sa = SearchAggregator()
+
+        # Test Google Images HTML parser
+        google_resp = MagicMock(status_code=200)
+        google_resp.text = 'AF_initDataCallback(["https://cdn.example.org/portrait_hd.jpg", 800, 600]);'
+        with patch("requests.get", return_value=google_resp):
+            g_items = sa.search_google_images("Jane Doe", max_results=5)
+            self.assertEqual(len(g_items), 1)
+            self.assertEqual(g_items[0]["engine"], "Google")
+            self.assertEqual(g_items[0]["image_url"], "https://cdn.example.org/portrait_hd.jpg")
+
+        # Test Brave Images HTML parser
+        brave_resp = MagicMock(status_code=200)
+        brave_resp.text = '{"title":"Jane Bio","url":"https://bio.example.org/jane","properties":{"url":"https://bio.example.org/jane.png"}}'
+        with patch("requests.get", return_value=brave_resp):
+            b_items = sa.search_brave_images("Jane Doe", max_results=5)
+            self.assertEqual(len(b_items), 1)
+            self.assertEqual(b_items[0]["engine"], "Brave")
+            self.assertEqual(b_items[0]["image_url"], "https://bio.example.org/jane.png")
+
+        # Test Yandex Images HTML parser
+        yandex_resp = MagicMock(status_code=200)
+        yandex_resp.text = """<div class="serp-item" data-bem='{"serp-item":{"img_href":"https://ya.example.org/face.jpg","snippet":{"url":"https://ya.example.org/profile","title":"Jane Yandex","domain":"ya.example.org"}}}'></div>"""
+        with patch("requests.get", return_value=yandex_resp):
+            y_items = sa.search_yandex_images("Jane Doe", max_results=5)
+            self.assertEqual(len(y_items), 1)
+            self.assertEqual(y_items[0]["engine"], "Yandex")
+            self.assertEqual(y_items[0]["image_url"], "https://ya.example.org/face.jpg")
+
+        # Test Wikimedia Commons JSON parser
+        wiki_resp = MagicMock(status_code=200)
+        wiki_resp.json.return_value = {
+            "query": {
+                "pages": {
+                    "101": {
+                        "title": "File:Jane_Doe_2025.jpg",
+                        "imageinfo": [{
+                            "thumburl": "https://upload.wikimedia.org/jane_800.jpg",
+                            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Jane_Doe_2025.jpg"
+                        }]
+                    }
+                }
+            }
+        }
+        with patch("requests.get", return_value=wiki_resp):
+            w_items = sa.search_wikimedia_portraits("Jane Doe", max_results=5)
+            self.assertEqual(len(w_items), 1)
+            self.assertEqual(w_items[0]["engine"], "Wikimedia")
+
+        # Test /api/search/providers endpoint
+        client = TestClient(server.app)
+        prov_res = client.get("/api/search/providers")
+        self.assertEqual(prov_res.status_code, 200)
+        body = prov_res.json()
+        self.assertEqual(len(body["providers"]), 6)
+        self.assertEqual(body["dork_summary"]["total_categories"], 8)
+        self.assertGreaterEqual(body["dork_summary"]["total_patterns"], 60)
+        self.assertEqual(body["seed_catalog"]["total_bundles"], 8)
+        self.assertGreaterEqual(body["seed_catalog"]["total_curated_urls"], 130)
+
     def test_osint_dorker_generation(self):
-        """Verify OSINTDorker constructs structured dorks across categories."""
+        """Verify OSINTDorker constructs structured dorks across all 8 categories."""
         from desertfox.ingestion.dorker import OSINTDorker
 
-        dorks_all = OSINTDorker.generate_dorks("Alice Smith", max_dorks=10)
-        self.assertGreaterEqual(len(dorks_all), 4)
+        summary = OSINTDorker.get_summary()
+        self.assertEqual(summary["total_categories"], 8)
+        self.assertGreaterEqual(summary["total_patterns"], 60)
+
+        dorks_all = OSINTDorker.generate_dorks("Alice Smith", max_dorks=16)
+        self.assertEqual(len(dorks_all), 16)
+        # First 8 dorks should cover all 8 categories via round-robin interleaving
+        first_8_cats = {d["category"] for d in dorks_all[:8]}
+        self.assertEqual(len(first_8_cats), 8)
         for d in dorks_all:
             self.assertIn("category", d)
             self.assertIn("dork", d)
@@ -637,14 +727,17 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertTrue(all(d["category"] == "social" for d in social_dorks))
 
     def test_seed_manager_utilities(self):
-        """Verify SeedHubManager bundle retrieval, text URL parsing, and sitemap extraction."""
+        """Verify SeedHubManager bundle retrieval (134 URLs across 8 bundles), text URL parsing, and sitemap extraction."""
         from unittest.mock import patch, MagicMock
         from desertfox.ingestion.seed_manager import SeedHubManager
 
-        # Test bundle URLs
+        # Test bundle URLs and catalog summary
         tech_urls = SeedHubManager.get_bundle_urls("tech_execs")
-        self.assertGreater(len(tech_urls), 3)
+        self.assertGreaterEqual(len(tech_urls), 20)
         self.assertIn("https://about.meta.com/company-info/", tech_urls)
+
+        all_urls = SeedHubManager.get_bundle_urls("all")
+        self.assertGreaterEqual(len(all_urls), 130)
 
         empty = SeedHubManager.get_bundle_urls("nonexistent_bundle")
         self.assertEqual(empty, [])

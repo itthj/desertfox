@@ -2,14 +2,15 @@
 OSINT Platform Dorking Engine for DesertFox.
 Generates targeted search engine queries across high-probability identity networks,
 social platforms, corporate directories, academic rosters, speaker registries,
-news/press archives, developer ecosystems, public records, and visual portfolios.
+news/press archives, developer ecosystems, public records, visual portfolios,
+leaked media / NCII vaults (e.g. Erome, Bunkr, Cyberdrop, Fapello), and video/tube platforms.
 """
 
 from typing import List, Dict, Any, Optional
 
 
 class OSINTDorker:
-    """Generates specialized search dorks for deep identity exposure discovery."""
+    """Generates specialized search dorks for deep identity and leaked-media exposure discovery."""
 
     CATEGORY_METADATA: Dict[str, str] = {
         "social": "Social Networks & Identity Profiles",
@@ -20,6 +21,8 @@ class OSINTDorker:
         "developer_tech": "Open-Source, AI Hubs & Developer Profiles",
         "public_records": "Government, Institutional & Non-Profit Rosters",
         "visual_portfolios": "Photography, Creative & Video Hosting Platforms",
+        "leaked_media_ncii": "Leaked Media Vaults, Scraper Albums & NCII Defense (Erome, Bunkr, etc.)",
+        "video_streams_tubes": "Video Platforms, Clip Mirrors, Livestreams & Tube Aggregators",
     }
 
     PLATFORM_PATTERNS: Dict[str, List[str]] = {
@@ -105,6 +108,52 @@ class OSINTDorker:
             'site:youtube.com "@{query}"',
             'site:imdb.com/name "{query}"',
         ],
+        "leaked_media_ncii": [
+            'site:erome.com "{query}"',
+            'site:erome.fan "{query}"',
+            'site:bunkr.si "{query}"',
+            'site:bunkr.is "{query}"',
+            'site:bunkr.ru "{query}"',
+            'site:bunkr.ax "{query}"',
+            'site:cyberdrop.me "{query}"',
+            'site:coomer.su "{query}"',
+            'site:kemono.su "{query}"',
+            'site:fapello.com "{query}"',
+            'site:fapello.su "{query}"',
+            'site:thothub.to "{query}"',
+            'site:thothub.lol "{query}"',
+            'site:simpcity.su "{query}"',
+            'site:jpg5.su "{query}"',
+            'site:pixhost.to "{query}"',
+            'site:imgbox.com "{query}"',
+            'site:imagebam.com "{query}"',
+            'site:ibb.co "{query}"',
+            'site:postimages.org "{query}"',
+            'site:pixeldrain.com "{query}"',
+            'site:gofile.io "{query}"',
+            '"{query}" (inurl:leak OR inurl:leaked OR inurl:erome OR inurl:bunkr OR inurl:fapello)',
+        ],
+        "video_streams_tubes": [
+            'site:youtube.com "{query}"',
+            'site:vimeo.com "{query}"',
+            'site:dailymotion.com "{query}"',
+            'site:tiktok.com "{query}"',
+            'site:twitch.tv "{query}"',
+            'site:kick.com "{query}"',
+            'site:rumble.com "{query}"',
+            'site:odysee.com "{query}"',
+            'site:bitchute.com "{query}"',
+            'site:streamable.com "{query}"',
+            'site:spankbang.com "{query}"',
+            'site:xvideos.com "{query}"',
+            'site:pornhub.com "{query}"',
+            'site:xnxx.com "{query}"',
+            'site:eporner.com "{query}"',
+            'site:camwhores.tv "{query}"',
+            'site:vk.com/video "{query}"',
+            'site:ok.ru/video "{query}"',
+            'site:archive.org/details "{query}"',
+        ],
     }
 
     @classmethod
@@ -112,7 +161,7 @@ class OSINTDorker:
         cls,
         query: str,
         categories: Optional[List[str]] = None,
-        max_dorks: int = 24
+        max_dorks: int = 30
     ) -> List[Dict[str, str]]:
         """
         Generates structured search dorks for a target name or handle.

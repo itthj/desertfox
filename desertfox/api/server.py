@@ -721,18 +721,26 @@ def register_optout(req: OptOutRequest):
 
 @app.post("/api/takedown")
 def generate_takedown(req: TakedownRequest):
-    """Generates legally grounded GDPR / DMCA removal requests."""
-    if req.notice_type.lower() == "gdpr":
+    """Generates legally grounded GDPR / CCPA / DMCA / NCII removal requests."""
+    ntype = req.notice_type.lower()
+    if ntype == "gdpr":
         notice = TakedownNoticeGenerator.generate_gdpr_erasure_request(
             subject_name=req.subject_name,
             subject_email=req.subject_email,
             infringing_url=req.infringing_url,
             additional_notes=req.notes or ""
         )
-    elif req.notice_type.lower() == "ccpa":
+    elif ntype == "ccpa":
         notice = TakedownNoticeGenerator.generate_ccpa_deletion_request(
             consumer_name=req.subject_name,
             consumer_email=req.subject_email,
+            infringing_url=req.infringing_url,
+            additional_notes=req.notes or ""
+        )
+    elif ntype == "ncii":
+        notice = TakedownNoticeGenerator.generate_ncii_emergency_takedown(
+            subject_name=req.subject_name,
+            subject_email=req.subject_email,
             infringing_url=req.infringing_url,
             additional_notes=req.notes or ""
         )

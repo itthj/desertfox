@@ -138,3 +138,51 @@ Contact Email: {consumer_email}
 Resident of: {consumer_state}
 """
         return notice.strip()
+
+    @staticmethod
+    def generate_ncii_emergency_takedown(
+        subject_name: str,
+        subject_email: str,
+        infringing_url: str,
+        additional_notes: str = "",
+    ) -> str:
+        """
+        Generates an Emergency Non-Consensual Intimate Imagery (NCII) / Leaked Media
+        & Video Removal Demand citing the U.S. TAKE IT DOWN Act, 18 U.S.C. § 2257,
+        17 U.S.C. § 512(c) (DMCA), EU Digital Services Act (DSA) Art. 16, and GDPR Art. 17/9.
+        """
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        notice = f"""SUBJECT: URGENT LEGAL NOTICE — Non-Consensual Intimate Media / Leaked Content Removal Demand (TAKE IT DOWN Act / 18 U.S.C. § 2257 / DMCA § 512(c) / DSA Art. 16)
+DATE: {date_str}
+TO: Trust & Safety / Abuse Desk / Designated Copyright Agent / Legal Compliance
+
+IMMEDIATE EXPEDITED TAKEDOWN REQUIRED (48-HOUR STATUTORY MANDATE)
+
+I am the identifiable individual depicted in private, unauthorized, and non-consensual photographic and/or video media currently hosted or indexed on your platform at the following URL(s):
+
+Infringing & Unauthorized URL: {infringing_url}
+
+1. NON-CONSENSUAL INTIMATE IMAGERY (NCII) & STATUTORY VIOLATIONS:
+The material at the above URL was published and distributed without my consent. Continued hosting of this content violates:
+- U.S. Federal TAKE IT DOWN Act & State NCII Statutes (mandating removal of non-consensual intimate visual depictions and associated copies within 48 hours of notice).
+- 18 U.S.C. § 2257 & 28 C.F.R. Part 75: The uploader does not possess, and cannot produce, any valid government-issued age/identity verification or model release records for my depiction.
+- EU Digital Services Act (Regulation (EU) 2022/2065) Article 16 Notice-and-Action mechanism for illegal content and non-consensual sharing of private material.
+- GDPR Article 17 (Right to Erasure) and Article 9 (Unlawful processing of special-category biometric and sensitive personal data without explicit consent).
+
+2. DMCA COPYRIGHT INFRINGEMENT (17 U.S.C. § 512(c)):
+To the extent the media was self-captured or privately recorded on my device, I am also the exclusive copyright owner of the work. I have a good-faith belief that the use of this material is not authorized by me, any agent, or the law, and under penalty of perjury I affirm that the information in this notice is accurate.
+
+3. DEMAND FOR IMMEDIATE REMOVAL & HASH BLACKLISTING:
+I demand that you immediately:
+a) Remove and disable public access to the content at {infringing_url}, including all video streams, preview thumbnails, storyboard sprites, and downloadable archives.
+b) Purge the media from all edge CDNs, mirrors, and cache servers.
+c) Compute and blacklist the cryptographic and perceptual hashes (MD5 / SHA-256 / PDQ / PhotoDNA) of the files to prevent automated or manual re-upload across your network.
+d) Confirm completion of removal in writing to {subject_email}.
+
+{f"Additional Forensic Details: {additional_notes}" if additional_notes else ""}
+
+Signed,
+{subject_name}
+Contact Email: {subject_email}
+"""
+        return notice.strip()

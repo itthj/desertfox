@@ -328,12 +328,30 @@
                 <!-- Curated Bundles -->
                 <div class="space-y-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
-                        <label class="text-xs mono text-slate-400">QUICK HARVEST CURATED BUNDLES (8 SECTORS • 134 VERIFIED DIRECTORIES)</label>
+                        <label class="text-xs mono text-slate-400">QUICK HARVEST CURATED BUNDLES (10 SECTORS • 172 VERIFIED DIRECTORIES)</label>
                         <button onclick="harvestBundle('all')" id="btn-bundle-all" class="px-3 py-1 rounded text-[11px] mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_12px_rgba(99,102,241,0.35)] transition-all">
-                            🌐 Sweep All 8 Bundles (134 URLs)
+                            🌐 Sweep All 10 Bundles (172 URLs)
                         </button>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <div class="bg-[#090d16] border border-red-500/40 rounded-lg p-3 space-y-2 flex flex-col justify-between hover:border-red-500/70 transition-all">
+                            <div>
+                                <div class="text-xs font-semibold mono text-red-400">🚨 Leak Vaults & NCII (20)</div>
+                                <div class="text-[11px] text-slate-400 mt-1">Erome (.com/.fan), Bunkr, Cyberdrop, Fapello, Coomer, Kemono, Thothub, SimpCity, Pixhost, ImgBox.</div>
+                            </div>
+                            <button onclick="harvestBundle('leak_vault_monitors')" id="btn-bundle-leak_vault_monitors" class="w-full mt-2 py-1.5 rounded text-[11px] mono font-semibold bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/40 transition-all">
+                                Audit Leak Vaults (20)
+                            </button>
+                        </div>
+                        <div class="bg-[#090d16] border border-amber-500/40 rounded-lg p-3 space-y-2 flex flex-col justify-between hover:border-amber-500/70 transition-all">
+                            <div>
+                                <div class="text-xs font-semibold mono text-amber-300">🎬 Video & Tube Hosts (18)</div>
+                                <div class="text-[11px] text-slate-400 mt-1">YouTube, Vimeo, Dailymotion, TikTok, Streamable, SpankBang, XVideos, Pornhub, Eporner, CamWhores.</div>
+                            </div>
+                            <button onclick="harvestBundle('video_clip_platforms')" id="btn-bundle-video_clip_platforms" class="w-full mt-2 py-1.5 rounded text-[11px] mono font-semibold bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/40 transition-all">
+                                Audit Video Hosts (18)
+                            </button>
+                        </div>
                         <div class="bg-[#090d16] border border-slate-800 rounded-lg p-3 space-y-2 flex flex-col justify-between hover:border-slate-700 transition-all">
                             <div>
                                 <div class="text-xs font-semibold mono text-cyan-300">🏢 Tech & Cloud Execs (22)</div>
@@ -581,10 +599,18 @@
                 <!-- PLATFORM DORKING RECONNAISSANCE -->
                 <div class="border border-slate-800 bg-[#0a0f1d] rounded-lg p-4 space-y-3">
                     <div class="flex items-center justify-between">
-                        <span class="text-xs mono font-semibold text-purple-400">⚡ MULTI-PLATFORM OSINT DORKING (8 SECTORS • 66 TARGETED DORK PATTERNS)</span>
-                        <span class="text-[10px] mono text-slate-400">Deep Cross-Network Discovery</span>
+                        <span class="text-xs mono font-semibold text-purple-400">⚡ MULTI-PLATFORM OSINT DORKING (10 SECTORS • 108 TARGETED DORK PATTERNS)</span>
+                        <span class="text-[10px] mono text-slate-400">Deep Cross-Network & Leak Vault Discovery</span>
                     </div>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs mono text-slate-300">
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs mono text-slate-300">
+                        <label class="flex items-center space-x-2 cursor-pointer bg-red-950/30 p-2 rounded border border-red-500/40 hover:border-red-500/70">
+                            <input type="checkbox" id="dork-cat-leaked_media_ncii" checked class="rounded border-red-700 bg-slate-900 text-red-500 focus:ring-0">
+                            <span class="text-red-300 font-semibold">🚨 Leak Vaults & NCII (23)</span>
+                        </label>
+                        <label class="flex items-center space-x-2 cursor-pointer bg-amber-950/30 p-2 rounded border border-amber-500/40 hover:border-amber-500/70">
+                            <input type="checkbox" id="dork-cat-video_streams_tubes" checked class="rounded border-amber-700 bg-slate-900 text-amber-500 focus:ring-0">
+                            <span class="text-amber-300 font-semibold">🎬 Video & Tube Hosts (19)</span>
+                        </label>
                         <label class="flex items-center space-x-2 cursor-pointer bg-slate-900/60 p-2 rounded border border-slate-800 hover:border-slate-700">
                             <input type="checkbox" id="dork-cat-social" checked class="rounded border-slate-700 bg-slate-900 text-purple-500 focus:ring-0">
                             <span>Social Networks (13)</span>
@@ -631,16 +657,16 @@
                 <!-- VIDEO OSINT & KEYFRAME SCANNER -->
                 <div class="border border-amber-500/30 bg-[#0c101b] rounded-lg p-4 space-y-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
-                        <span class="text-xs mono font-semibold text-amber-400">🎬 VIDEO OSINT & TEMPORAL KEYFRAME SCANNER (YOUTUBE / VIMEO / MP4 TIMELINES)</span>
+                        <span class="text-xs mono font-semibold text-amber-400">🎬 VIDEO OSINT & LEAK VAULT KEYFRAME SCANNER (YOUTUBE / VIMEO / EROME / BUNKR / TUBES / MP4)</span>
                         <span class="text-[10px] mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">FRAME + TIMESTAMP EXTRACTION</span>
                     </div>
                     <p class="text-xs text-slate-400">
-                        People frequently appear in conference talks, interviews, panels, and news clips. Scan public video platforms for your target query above, or paste a direct YouTube/Vimeo/.mp4 video URL (or upload a video clip) to extract keyframes and index every face with exact <code class="text-amber-300">MM:SS</code> jump timestamps.
+                        Scan public video platforms, tube sites, and leak album vaults (<code class="text-red-300">erome.com</code>, <code class="text-red-300">erome.fan</code>, <code class="text-red-300">bunkr.si</code>, <code class="text-red-300">cyberdrop.me</code>, <code class="text-red-300">fapello.com</code>, <code class="text-amber-300">spankbang</code>, <code class="text-amber-300">xvideos</code>, <code class="text-amber-300">streamable</code>) for your query, or paste a direct video/album URL to extract keyframes and index faces with <code class="text-amber-300">MM:SS</code> jump timestamps.
                     </p>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div class="md:col-span-2 space-y-1">
-                            <label class="text-[11px] mono text-slate-400">DIRECT VIDEO URL (YOUTUBE, VIMEO, OR .MP4/.WEBM STREAM)</label>
-                            <input type="text" id="video-url-input" placeholder="https://www.youtube.com/watch?v=... or https://example.com/talk.mp4" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 mono">
+                            <label class="text-[11px] mono text-slate-400">DIRECT VIDEO OR LEAK ALBUM URL (YOUTUBE, VIMEO, EROME, BUNKR, TUBE, OR .MP4)</label>
+                            <input type="text" id="video-url-input" placeholder="https://www.erome.com/a/... or https://www.youtube.com/watch?v=... or .mp4" class="w-full bg-[#050811] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 mono">
                         </div>
                         <div class="space-y-1">
                             <label class="text-[11px] mono text-slate-400">OR UPLOAD LOCAL VIDEO FILE</label>
@@ -734,6 +760,7 @@
                     <div class="space-y-1">
                         <label class="text-xs mono text-slate-400">LEGAL FRAMEWORK</label>
                         <select id="legal-type" class="w-full bg-[#090d16] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 mono">
+                            <option value="ncii">🚨 Emergency NCII / Leaked Media Takedown (TAKE IT DOWN Act / § 2257 / DSA)</option>
                             <option value="gdpr">GDPR Article 17 (Right to Erasure)</option>
                             <option value="ccpa">CCPA § 1798.105 (Right to Delete)</option>
                             <option value="dmca">DMCA § 512(c) (Copyright Infringement)</option>
@@ -862,8 +889,10 @@
                 <div>
                     <label class="mono text-slate-400">NOTICE TYPE</label>
                     <select id="modal-type" class="w-full bg-[#050811] border border-slate-800 rounded p-2 text-slate-200 mono">
+                        <option value="ncii">🚨 Emergency NCII / Leaked Media Removal (TAKE IT DOWN Act / § 2257 / DSA)</option>
                         <option value="gdpr">GDPR Article 17 (Right to Erasure / Right to be Forgotten)</option>
                         <option value="dmca">DMCA Copyright Infringement Notice</option>
+                        <option value="ccpa">CCPA § 1798.105 (Right to Delete)</option>
                     </select>
                 </div>
             </div>
@@ -1506,6 +1535,7 @@
         function getSelectedDorkCategories() {
             const categories = [];
             const allCats = [
+                'leaked_media_ncii', 'video_streams_tubes',
                 'social', 'corporate', 'academic', 'speakers',
                 'news_media', 'developer_tech', 'public_records', 'visual_portfolios'
             ];

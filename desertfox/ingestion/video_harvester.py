@@ -367,6 +367,116 @@ class VideoFrameHarvester:
             "frames": frames,
         }
 
+    @staticmethod
+    def _identify_platform(url: str) -> str:
+        """Maps a video or leak-vault URL to a human-readable platform identifier."""
+        host = urllib.parse.urlparse(url or "").netloc.lower()
+        mapping = {
+            "erome.com": "Erome",
+            "erome.fan": "EromeFan",
+            "bunkr.": "Bunkr",
+            "cyberdrop.": "Cyberdrop",
+            "fapello.": "Fapello",
+            "coomer.su": "Coomer",
+            "kemono.su": "Kemono",
+            "thothub.": "Thothub",
+            "simpcity.": "SimpCity",
+            "dailymotion.com": "Dailymotion",
+            "streamable.com": "Streamable",
+            "tiktok.com": "TikTok",
+            "twitch.tv": "Twitch",
+            "kick.com": "Kick",
+            "rumble.com": "Rumble",
+            "odysee.com": "Odysee",
+            "bitchute.com": "BitChute",
+            "spankbang.com": "SpankBang",
+            "xvideos.com": "XVideos",
+            "pornhub.com": "Pornhub",
+            "eporner.com": "EPorner",
+            "camwhores.": "CamWhores",
+            "vk.com": "VKVideo",
+            "ok.ru": "OKVideo",
+            "archive.org": "InternetArchive",
+        }
+        for key, label in mapping.items():
+            if key in host:
+                return label
+        return host or "WebVideo"
+
+    def extract_generic_page_video_keyframes(
+        self,
+        page_url: str,
+        html_text: str,
+        max_frames: int = 16,
+    ) -> Dict[str, Any]:
+        """
+        Extracts video poster frames, storyboard sprites, and album gallery previews
+        from video/leak hosting pages (e.g. Erome, Bunkr, Cyberdrop, Fapello,
+        Streamable, Dailymotion, TikTok, SpankBang, XVideos).
+        """
+        platform = self._identify_platform(page_url)
+        title_match = re.search(r"<title[^>]*>([^<]+)</title>", html_text, flags=re.IGNORECASE)
+        title = html.unescape(title_match.group(1).strip()) if title_match else f"{platform} Media ({page_url})"
+
+        candidate_img_urls: List[str] = []
+        seen = set()
+
+        patterns = [
+            r'<video[^>]+poster=["\']([^"\'>\s]+)["\']',
+            r'<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\'>\s]+)["\']',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\'>\s]+)["\']',
+            r'data-(?:src|thumb|preview|mediabook|original)=["\'](https?://[^"\'>\s]+?\.(?:jpg|jpeg|png|webp)(?:\?[^"\'>\s]*)?)["\']',
+            r'<img[^>]+src=["\'](https?://[^"\'>\s]+?\.(?:jpg|jpeg|png|webp)(?:\?[^"\'>\s]*)?)["\']',
+        ]
+
+        for pat in patterns:
+            for raw_u in re.findall(pat, html_text, flags=re.IGNORECASE):
+                resolved = urllib.parse.urljoin(page_url, html.unescape(raw_u.strip()))
+                lower_u = resolved.lower()
+                if any(skip in lower_u for skip in ("logo", "favicon", "sprite-icon", "avatar-default", "blank.")):
+                    continue
+                if resolved.startswith("http") and resolved not in seen:
+                    seen.add(resolved)
+                    candidate_img_urls.append(resolved)
+
+        frames: List[Dict[str, Any]] = []
+        for idx, img_url in enumerate(candidate_img_urls[:max_frames]):
+            try:
+                r = safe_get(
+                    img_url,
+                    headers={"User-Agent": USER_AGENT, "Referer": page_url},
+                    timeout=self.timeout,
+                    max_bytes=12 * 1024 * 1024,
+                )
+                if not r or not r.body:
+                    continue
+                pil_img = Image.open(io.BytesIO(r.body)).convert("RGB")
+                if pil_img.width < 64 or pil_img.height < 64:
+                    continue
+                approx_sec = float(idx * 10)
+                frames.append({
+                    "image": pil_img,
+                    "frame_index": idx,
+                    "timestamp_sec": approx_sec,
+                    "timestamp_hms": format_timestamp_hms(approx_sec),
+                    "keyframe_label": f"Frame #{idx + 1}",
+                    "frame_image_url": img_url,
+                    "deep_link_url": page_url,
+                })
+            except Exception:
+                continue
+
+        if not frames:
+            return {"error": "No decodable video stream or album keyframes found at URL", "frames": []}
+
+        return {
+            "platform": platform,
+            "video_url": page_url,
+            "title": title,
+            "author": urllib.parse.urlparse(page_url).netloc,
+            "frames": frames,
+        }
+
     def harvest_video_url(
         self,
         url: str,
@@ -374,11 +484,12 @@ class VideoFrameHarvester:
         max_frames: int = 20,
     ) -> Dict[str, Any]:
         """
-        Unified entry point for any video URL:
+        Unified entry point for any video or leak-album URL:
           1. YouTube video / Shorts -> multi-keyframe storyboard extraction
           2. Vimeo video -> oEmbed high-res frame extraction
           3. Direct .mp4 / .webm / .mov URL -> downloads bounded video & decodes frames via OpenCV
-          4. Webpage with embedded <video> or YouTube/Vimeo iframe -> discovers video & extracts frames
+          4. Webpage with embedded <video> or leak album (Erome, Bunkr, Fapello, Tube sites) ->
+             decodes embedded .mp4 stream OR extracts video posters & album keyframes
         """
         yt_id = self.extract_youtube_id(url)
         if yt_id:
@@ -429,7 +540,7 @@ class VideoFrameHarvester:
                     f["deep_link_url"] = build_timestamp_deeplink(fetched.url, f["timestamp_sec"])
                     f["frame_image_url"] = fetched.url
                 return {
-                    "platform": "DirectVideo",
+                    "platform": self._identify_platform(fetched.url),
                     "video_url": fetched.url,
                     "title": os.path.basename(path_lower) or "Direct Video Stream",
                     "author": urllib.parse.urlparse(fetched.url).netloc,
@@ -454,23 +565,33 @@ class VideoFrameHarvester:
                 if self.extract_youtube_id(resolved_video):
                     return self.extract_youtube_keyframes(resolved_video)
                 if any(resolved_video.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".webm", ".mov", ".m4v")):
-                    return self.harvest_video_url(
+                    sub_res = self.harvest_video_url(
                         resolved_video,
                         sample_interval_sec=sample_interval_sec,
                         max_frames=max_frames,
                     )
+                    if sub_res.get("frames"):
+                        return sub_res
 
-            return {"error": "No decodable video stream or embedded video found at URL", "frames": []}
+            # Fallback: extract video posters, storyboard sprites, and leak-album preview keyframes
+            return self.extract_generic_page_video_keyframes(fetched.url, html_text, max_frames=max_frames)
         except Exception as exc:
             logger.warning("Failed to harvest video URL %s: %s", url, exc)
             return {"error": str(exc), "frames": []}
 
-    def search_public_videos(self, query: str, max_videos: int = 12) -> List[Dict[str, Any]]:
+    def search_public_videos(
+        self,
+        query: str,
+        max_videos: int = 16,
+        include_leak_platforms: bool = True,
+    ) -> List[Dict[str, Any]]:
         """
-        Searches YouTube, Bing Videos, and DuckDuckGo for public videos matching
-        a target identity or handle without requiring API keys.
+        Searches YouTube, Bing Videos, and leak/tube video platforms (Erome, Bunkr,
+        Fapello, Dailymotion, Vimeo, Streamable, TikTok, SpankBang, XVideos)
+        for public videos and leaked albums matching a target identity or handle.
         """
         discovered: List[Dict[str, Any]] = []
+        seen_urls = set()
         seen_ids = set()
 
         # 1. Direct YouTube search page scraping for videoRenderer items
@@ -478,7 +599,6 @@ class VideoFrameHarvester:
             yt_search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
             resp = requests.get(yt_search_url, headers=self.headers, timeout=self.timeout)
             if resp.status_code == 200:
-                # Extract videoId and title pairs from ytInitialData
                 vid_matches = re.findall(
                     r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"\}',
                     resp.text,
@@ -492,6 +612,7 @@ class VideoFrameHarvester:
                         continue
                     seen_ids.add(vid_id)
                     video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                    seen_urls.add(video_url)
                     discovered.append({
                         "video_id": vid_id,
                         "video_url": video_url,
@@ -510,34 +631,67 @@ class VideoFrameHarvester:
         except Exception as exc:
             logger.warning("YouTube search failed: %s", exc)
 
-        # 2. Fallback / supplement via Bing Video search
-        try:
-            bing_vid_url = f"https://www.bing.com/videos/search?q={urllib.parse.quote(query)}"
-            resp_b = requests.get(bing_vid_url, headers=self.headers, timeout=self.timeout)
-            if resp_b.status_code == 200:
-                yt_links = re.findall(r"https?://(?:www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{11})", resp_b.text)
-                for vid_id in yt_links:
-                    if vid_id in seen_ids:
-                        continue
-                    seen_ids.add(vid_id)
-                    video_url = f"https://www.youtube.com/watch?v={vid_id}"
-                    discovered.append({
-                        "video_id": vid_id,
-                        "video_url": video_url,
-                        "title": f"{query} (Video)",
-                        "platform": "YouTube",
-                        "domain": "youtube.com",
-                        "keyframes": [
-                            {"url": f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg", "timestamp_sec": 0.0, "label": "00:00"},
-                            {"url": f"https://i.ytimg.com/vi/{vid_id}/1.jpg", "timestamp_sec": 30.0, "label": "00:30 (25%)"},
-                            {"url": f"https://i.ytimg.com/vi/{vid_id}/2.jpg", "timestamp_sec": 60.0, "label": "01:00 (50%)"},
-                            {"url": f"https://i.ytimg.com/vi/{vid_id}/3.jpg", "timestamp_sec": 90.0, "label": "01:30 (75%)"},
-                        ],
-                    })
-                    if len(discovered) >= max_videos:
-                        return discovered
-        except Exception as exc:
-            logger.warning("Bing video search failed: %s", exc)
+        # 2. Bing Video search + multi-platform leak/tube video discovery
+        search_queries = [query]
+        if include_leak_platforms:
+            clean_q = query.strip().replace('"', '')
+            search_queries.append(
+                f'"{clean_q}" (site:erome.com OR site:erome.fan OR site:bunkr.si OR site:fapello.com OR site:thothub.to OR site:streamable.com OR site:dailymotion.com OR site:vimeo.com OR site:spankbang.com)'
+            )
+
+        for sq in search_queries:
+            if len(discovered) >= max_videos:
+                break
+            try:
+                bing_vid_url = f"https://www.bing.com/videos/search?q={urllib.parse.quote(sq)}"
+                resp_b = requests.get(bing_vid_url, headers=self.headers, timeout=self.timeout)
+                if resp_b.status_code == 200:
+                    yt_links = re.findall(r"https?://(?:www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{11})", resp_b.text)
+                    for vid_id in yt_links:
+                        if vid_id in seen_ids:
+                            continue
+                        seen_ids.add(vid_id)
+                        video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                        seen_urls.add(video_url)
+                        discovered.append({
+                            "video_id": vid_id,
+                            "video_url": video_url,
+                            "title": f"{query} (Video)",
+                            "platform": "YouTube",
+                            "domain": "youtube.com",
+                            "keyframes": [
+                                {"url": f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg", "timestamp_sec": 0.0, "label": "00:00"},
+                                {"url": f"https://i.ytimg.com/vi/{vid_id}/1.jpg", "timestamp_sec": 30.0, "label": "00:30 (25%)"},
+                                {"url": f"https://i.ytimg.com/vi/{vid_id}/2.jpg", "timestamp_sec": 60.0, "label": "01:00 (50%)"},
+                                {"url": f"https://i.ytimg.com/vi/{vid_id}/3.jpg", "timestamp_sec": 90.0, "label": "01:30 (75%)"},
+                            ],
+                        })
+                        if len(discovered) >= max_videos:
+                            return discovered
+
+                    # Also extract non-YouTube video/leak URLs discovered on the search page
+                    other_urls = re.findall(
+                        r'https?://(?:www\.)?(?:erome\.(?:com|fan)|bunkr\.(?:si|is|ru|ax)|fapello\.(?:com|su)|thothub\.(?:to|lol)|vimeo\.com|dailymotion\.com|streamable\.com|tiktok\.com|spankbang\.com|xvideos\.com)/[^\s"\'<>]+',
+                        resp_b.text,
+                        flags=re.IGNORECASE,
+                    )
+                    for raw_u in other_urls:
+                        u_clean = html.unescape(raw_u).rstrip("./,;")
+                        if u_clean not in seen_urls:
+                            seen_urls.add(u_clean)
+                            plat = self._identify_platform(u_clean)
+                            discovered.append({
+                                "video_id": u_clean[-12:],
+                                "video_url": u_clean,
+                                "title": f"{query} - {plat}",
+                                "platform": plat,
+                                "domain": urllib.parse.urlparse(u_clean).netloc,
+                                "keyframes": [],
+                            })
+                            if len(discovered) >= max_videos:
+                                return discovered
+            except Exception as exc:
+                logger.warning("Bing video/leak search failed: %s", exc)
 
         return discovered[:max_videos]
 

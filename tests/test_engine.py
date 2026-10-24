@@ -700,24 +700,24 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertEqual(prov_res.status_code, 200)
         body = prov_res.json()
         self.assertEqual(len(body["providers"]), 6)
-        self.assertEqual(body["dork_summary"]["total_categories"], 8)
-        self.assertGreaterEqual(body["dork_summary"]["total_patterns"], 60)
-        self.assertEqual(body["seed_catalog"]["total_bundles"], 8)
-        self.assertGreaterEqual(body["seed_catalog"]["total_curated_urls"], 130)
+        self.assertEqual(body["dork_summary"]["total_categories"], 10)
+        self.assertGreaterEqual(body["dork_summary"]["total_patterns"], 100)
+        self.assertEqual(body["seed_catalog"]["total_bundles"], 10)
+        self.assertGreaterEqual(body["seed_catalog"]["total_curated_urls"], 170)
 
     def test_osint_dorker_generation(self):
-        """Verify OSINTDorker constructs structured dorks across all 8 categories."""
+        """Verify OSINTDorker constructs structured dorks across all 10 categories including leak vaults and video tubes."""
         from desertfox.ingestion.dorker import OSINTDorker
 
         summary = OSINTDorker.get_summary()
-        self.assertEqual(summary["total_categories"], 8)
-        self.assertGreaterEqual(summary["total_patterns"], 60)
+        self.assertEqual(summary["total_categories"], 10)
+        self.assertGreaterEqual(summary["total_patterns"], 100)
 
-        dorks_all = OSINTDorker.generate_dorks("Alice Smith", max_dorks=16)
-        self.assertEqual(len(dorks_all), 16)
-        # First 8 dorks should cover all 8 categories via round-robin interleaving
-        first_8_cats = {d["category"] for d in dorks_all[:8]}
-        self.assertEqual(len(first_8_cats), 8)
+        dorks_all = OSINTDorker.generate_dorks("Alice Smith", max_dorks=20)
+        self.assertEqual(len(dorks_all), 20)
+        # First 10 dorks should cover all 10 categories via round-robin interleaving
+        first_10_cats = {d["category"] for d in dorks_all[:10]}
+        self.assertEqual(len(first_10_cats), 10)
         for d in dorks_all:
             self.assertIn("category", d)
             self.assertIn("dork", d)
@@ -725,6 +725,22 @@ class TestDesertFoxV2(unittest.TestCase):
 
         social_dorks = OSINTDorker.generate_dorks("Alice Smith", categories=["social"], max_dorks=5)
         self.assertTrue(all(d["category"] == "social" for d in social_dorks))
+
+        # Verify leaked media / NCII dork patterns (erome.fan, erome.com, bunkr, fapello, etc.)
+        leak_dorks = OSINTDorker.generate_dorks("Alice Smith", categories=["leaked_media_ncii"], max_dorks=25)
+        self.assertGreaterEqual(len(leak_dorks), 20)
+        combined_dork_str = " ".join(d["dork"] for d in leak_dorks)
+        self.assertIn("erome.fan", combined_dork_str)
+        self.assertIn("erome.com", combined_dork_str)
+        self.assertIn("bunkr.si", combined_dork_str)
+        self.assertIn("fapello.com", combined_dork_str)
+
+        # Verify video streams & tube dork patterns
+        vid_dorks = OSINTDorker.generate_dorks("Alice Smith", categories=["video_streams_tubes"], max_dorks=20)
+        self.assertGreaterEqual(len(vid_dorks), 15)
+        vid_dork_str = " ".join(d["dork"] for d in vid_dorks)
+        self.assertIn("spankbang.com", vid_dork_str)
+        self.assertIn("xvideos.com", vid_dork_str)
 
     def test_seed_manager_utilities(self):
         """Verify SeedHubManager bundle retrieval (134 URLs across 8 bundles), text URL parsing, and sitemap extraction."""
@@ -1060,6 +1076,80 @@ class TestDesertFoxV2(unittest.TestCase):
             finally:
                 server.engine.enrollment = prev_enrollment
                 server.engine.embedder.verifies_identity = prev_identity
+
+    def test_leak_vault_keyframes_and_ncii_emergency_takedown(self):
+        """Verify leak vault (erome.fan/erome.com/bunkr) keyframe extraction and emergency NCII takedown notice."""
+        from unittest.mock import patch, MagicMock
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.ingestion.seed_manager import SeedHubManager
+        from desertfox.ingestion.video_harvester import VideoFrameHarvester
+        from desertfox.privacy.takedown import TakedownNoticeGenerator
+
+        # 1. Verify leak_vault_monitors and video_clip_platforms seed bundles
+        leak_urls = SeedHubManager.get_bundle_urls("leak_vault_monitors")
+        self.assertIn("https://erome.fan/", leak_urls)
+        self.assertIn("https://www.erome.com/explore", leak_urls)
+        self.assertIn("https://bunkr.si/", leak_urls)
+
+        video_urls = SeedHubManager.get_bundle_urls("video_clip_platforms")
+        self.assertIn("https://spankbang.com/", video_urls)
+        self.assertIn("https://www.xvideos.com/", video_urls)
+
+        # 2. Verify VideoFrameHarvester generic page keyframe extraction on Erome/leak album HTML
+        import io
+        mock_erome_html = """
+        <html>
+            <head>
+                <title>Leaked Album Jane - Erome</title>
+                <meta property="og:image" content="https://s1.erome.com/thumb/poster_main.jpg" />
+            </head>
+            <body>
+                <video poster="https://s1.erome.com/thumb/vid_poster_1.jpg">
+                    <source src="https://v1.erome.com/videos/clip1.mp4" type="video/mp4" />
+                </video>
+                <img class="img-front" data-src="https://s1.erome.com/thumb/album_frame_2.jpg" />
+            </body>
+        </html>
+        """
+        img = Image.new("RGB", (120, 120), color=(180, 100, 120))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        fake_resp = MagicMock(body=buf.getvalue())
+        vh = VideoFrameHarvester()
+        with patch("desertfox.ingestion.video_harvester.safe_get", return_value=fake_resp):
+            extracted = vh.extract_generic_page_video_keyframes(
+                "https://erome.fan/a/xyz123",
+                html_text=mock_erome_html,
+                max_frames=10,
+            )
+            self.assertEqual(extracted["platform"], "EromeFan")
+            self.assertEqual(extracted["title"], "Leaked Album Jane - Erome")
+            self.assertEqual(len(extracted["frames"]), 3)
+
+        # 3. Verify Emergency NCII Takedown Generator and API endpoint
+        ncii_notice = TakedownNoticeGenerator.generate_ncii_emergency_takedown(
+            subject_name="Jane Doe",
+            subject_email="jane@example.org",
+            infringing_url="https://erome.fan/a/xyz123",
+            additional_notes="dHash: deadbeef12345678",
+        )
+        self.assertIn("TAKE IT DOWN Act", ncii_notice)
+        self.assertIn("18 U.S.C. § 2257", ncii_notice)
+        self.assertIn("erome.fan", ncii_notice)
+        self.assertIn("deadbeef12345678", ncii_notice)
+
+        client = TestClient(server.app)
+        api_res = client.post("/api/takedown", json={
+            "notice_type": "ncii",
+            "subject_name": "Jane Doe",
+            "subject_email": "jane@example.org",
+            "infringing_url": "https://erome.fan/a/xyz123",
+            "notes": "Leaked album detected with 94.2% ArcFace similarity",
+        })
+        self.assertEqual(api_res.status_code, 200)
+        self.assertEqual(api_res.json()["type"], "NCII")
+        self.assertIn("TAKE IT DOWN Act", api_res.json()["notice"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,12 +42,24 @@ class AdvancedHarvester:
         # Bandwidth is the real bottleneck: skip huge originals, index-grade photos are far smaller.
         self.max_image_bytes = 3 * 1024 * 1024
 
-    def _reserve_domain_slot(self, domain: str, min_gap: float = 0.25) -> float:
+    _CDN_DOMAINS = (
+        "mm.bing.net",
+        "avatars.mds.yandex.net",
+        "wikimedia.org",
+        "staticflickr.com",
+        "githubusercontent.com",
+        "gstatic.com",
+    )
+
+    def _reserve_domain_slot(self, domain: str, min_gap: float = 0.20) -> float:
         """Thread-safe per-domain politeness: returns how long the caller must sleep.
-        Slots are reserved under the lock but slept outside it, so different domains never block each other."""
+        Slots are reserved under the lock but slept outside it, so different domains never block each other.
+        Global image CDNs use a minimal 20ms gap so thumbnail batches download without artificial stalls."""
+        d_low = (domain or "").lower()
+        effective_gap = 0.02 if any(cdn in d_low for cdn in self._CDN_DOMAINS) else min_gap
         with self._lock:
             now = time.time()
-            slot = max(now, self.last_domain_request.get(domain, 0.0) + min_gap)
+            slot = max(now, self.last_domain_request.get(domain, 0.0) + effective_gap)
             self.last_domain_request[domain] = slot
             return max(0.0, slot - now)
 

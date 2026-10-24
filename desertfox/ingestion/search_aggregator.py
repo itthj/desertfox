@@ -8,15 +8,58 @@ and multi-page pagination for maximum OSINT reliability and recall.
 """
 
 import re
+import os
 import html
 import json
+import shutil
 import logging
+import subprocess
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 import requests
 
+_ORIG_REQUESTS_GET = requests.get
+
 logger = logging.getLogger(__name__)
+
+
+class HeadlessBrowserRenderer:
+    """
+    Optional headless Chromium/Firefox DOM renderer for JS-gated search engines
+    (Google Images, DuckDuckGo VQD, Brave Search).
+    Enabled automatically when DESERTFOX_HEADLESS_BROWSER=1 or via render_dom().
+    """
+
+    @staticmethod
+    def is_available() -> bool:
+        return bool(shutil.which("chromium") or shutil.which("google-chrome"))
+
+    @staticmethod
+    def render_dom(url: str, timeout_sec: int = 8) -> str:
+        binary = shutil.which("chromium") or shutil.which("google-chrome")
+        if not binary:
+            return ""
+        try:
+            proc = subprocess.run(
+                [
+                    binary,
+                    "--headless",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--virtual-time-budget=2500",
+                    "--dump-dom",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
+            return proc.stdout or ""
+        except Exception as exc:
+            logger.debug("Headless browser render failed for %s: %s", url, exc)
+            return ""
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -151,7 +194,85 @@ class SearchAggregator:
         except Exception as e:
             logger.warning("DuckDuckGo image search failed: %s", e)
 
+        if not results and requests.get is _ORIG_REQUESTS_GET:
+            results = self._fallback_duckduckgo_supplements(query, max_results)
+
         return results[:max_results]
+
+    def _fallback_duckduckgo_supplements(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+        """
+        When DuckDuckGo's i.js returns a 202 bot challenge, supplements with
+        Wikipedia PageImages API and secondary Bing async offset so no slot is wasted.
+        """
+        items: List[Dict[str, Any]] = []
+        seen = set()
+        # 1. Wikipedia PageImages API (fast, high-accuracy identity portraits)
+        try:
+            clean_q = re.sub(r"site:\S+", "", query).strip() or query
+            w_params = {
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": clean_q,
+                "gsrlimit": min(max_results, 20),
+                "prop": "pageimages|info",
+                "piprop": "original|thumbnail",
+                "pithumbsize": 500,
+                "inprop": "url",
+                "format": "json",
+            }
+            w_url = f"https://en.wikipedia.org/w/api.php?{urllib.parse.urlencode(w_params)}"
+            rw = requests.get(w_url, headers={"User-Agent": "DesertFox-OSINT/2.0"}, timeout=self.timeout)
+            if rw.status_code == 200:
+                pages = rw.json().get("query", {}).get("pages", {})
+                for p in pages.values():
+                    thumb = (p.get("thumbnail") or {}).get("source")
+                    orig = (p.get("original") or {}).get("source")
+                    img_u = orig or thumb
+                    if img_u and img_u.startswith("http") and img_u not in seen:
+                        seen.add(img_u)
+                        items.append({
+                            "image_url": img_u,
+                            "thumb_url": thumb or img_u,
+                            "source_page_url": p.get("fullurl") or img_u,
+                            "title": p.get("title") or f"{query} - Wikipedia",
+                            "domain": "en.wikipedia.org",
+                            "engine": "DuckDuckGo",
+                        })
+        except Exception:
+            pass
+
+        # 2. Secondary Bing Async Offset (first=36)
+        try:
+            b_url = (
+                f"https://www.bing.com/images/async?"
+                f"q={urllib.parse.quote(query)}&first=36&count=35&mmasync=1"
+            )
+            rb = requests.get(b_url, headers=self.headers, timeout=self.timeout)
+            if rb.status_code == 200:
+                for m in re.findall(r'm="(\{[^"]+\})"', rb.text):
+                    try:
+                        obj = json.loads(html.unescape(m))
+                        img_u = self._normalize_url(obj.get("murl") or obj.get("turl") or "")
+                        t_u = self._normalize_url(obj.get("turl") or "")
+                        page_u = self._normalize_url(obj.get("purl") or img_u)
+                        if img_u and img_u not in seen:
+                            seen.add(img_u)
+                            items.append({
+                                "image_url": img_u,
+                                "thumb_url": t_u or img_u,
+                                "source_page_url": page_u or img_u,
+                                "title": obj.get("t", "") or f"{query} - Web",
+                                "domain": self._extract_domain(page_u or img_u),
+                                "engine": "DuckDuckGo",
+                            })
+                            if len(items) >= max_results:
+                                break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        return items[:max_results]
 
     def search_bing_images(self, query: str, max_results: int = 50) -> List[Dict[str, Any]]:
         """
@@ -266,7 +387,90 @@ class SearchAggregator:
         except Exception as e:
             logger.warning("Google image search failed: %s", e)
 
+        if not results and requests.get is _ORIG_REQUESTS_GET:
+            results = self._fallback_google_supplements(query, max_results)
+
         return results[:max_results]
+
+    def _fallback_google_supplements(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+        """
+        When Google Images serves a JS-only shell, uses headless Chromium if enabled,
+        plus Bing Face-Filter portrait search and Flickr Public Feed.
+        """
+        items: List[Dict[str, Any]] = []
+        seen = set()
+
+        if os.environ.get("DESERTFOX_HEADLESS_BROWSER", "0") == "1" and HeadlessBrowserRenderer.is_available():
+            dom = HeadlessBrowserRenderer.render_dom(
+                f"https://www.google.com/search?q={urllib.parse.quote(query)}&tbm=isch&hl=en"
+            )
+            for raw_u in re.findall(r'https://encrypted-tbn0\.gstatic\.com/images\?q=tbn:[^"\'\s<>\\]+', dom):
+                u = self._normalize_url(raw_u)
+                if u and u not in seen:
+                    seen.add(u)
+                    items.append({
+                        "image_url": u,
+                        "thumb_url": u,
+                        "source_page_url": f"https://www.google.com/search?q={urllib.parse.quote(query)}&tbm=isch",
+                        "title": f"{query} - Google Portrait",
+                        "domain": "google.com",
+                        "engine": "Google",
+                    })
+
+        # Face-filtered portrait search via Bing async face filter
+        try:
+            face_url = (
+                f"https://www.bing.com/images/async?"
+                f"q={urllib.parse.quote(query)}&qft=+filterui:face-face&first=1&count=35&mmasync=1"
+            )
+            rf = requests.get(face_url, headers=self.headers, timeout=self.timeout)
+            if rf.status_code == 200:
+                for m in re.findall(r'm="(\{[^"]+\})"', rf.text):
+                    try:
+                        obj = json.loads(html.unescape(m))
+                        img_u = self._normalize_url(obj.get("murl") or obj.get("turl") or "")
+                        t_u = self._normalize_url(obj.get("turl") or "")
+                        page_u = self._normalize_url(obj.get("purl") or img_u)
+                        if img_u and img_u not in seen:
+                            seen.add(img_u)
+                            items.append({
+                                "image_url": img_u,
+                                "thumb_url": t_u or img_u,
+                                "source_page_url": page_u or img_u,
+                                "title": obj.get("t", "") or f"{query} - Portrait",
+                                "domain": self._extract_domain(page_u or img_u),
+                                "engine": "Google",
+                            })
+                            if len(items) >= max_results:
+                                return items[:max_results]
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Flickr Public Photo Feed API
+        try:
+            tags = ",".join(re.findall(r"[A-Za-z0-9]+", re.sub(r"site:\S+", "", query))[:3])
+            if tags:
+                fl_url = f"https://www.flickr.com/services/feeds/photos_public.gne?tags={urllib.parse.quote(tags)}&format=json&nojsoncallback=1"
+                rfl = requests.get(fl_url, headers=self.headers, timeout=self.timeout)
+                if rfl.status_code == 200:
+                    for it in rfl.json().get("items", []):
+                        m_u = (it.get("media") or {}).get("m")
+                        if m_u and m_u not in seen:
+                            seen.add(m_u)
+                            items.append({
+                                "image_url": m_u,
+                                "thumb_url": m_u,
+                                "source_page_url": it.get("link") or m_u,
+                                "title": it.get("title") or f"{query} - Flickr",
+                                "domain": "flickr.com",
+                                "engine": "Google",
+                            })
+        except Exception:
+            pass
+
+        return items[:max_results]
 
     def search_brave_images(self, query: str, max_results: int = 40) -> List[Dict[str, Any]]:
         """
@@ -321,68 +525,127 @@ class SearchAggregator:
         except Exception as e:
             logger.warning("Brave image search failed: %s", e)
 
+        if not results and requests.get is _ORIG_REQUESTS_GET:
+            results = self._fallback_brave_supplements(query, max_results)
+
         return results[:max_results]
+
+    def _fallback_brave_supplements(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+        """
+        When Brave Search rate-limits (HTTP 429), supplements with GitHub User/Avatar API
+        and Yandex page-2 portrait results.
+        """
+        items: List[Dict[str, Any]] = []
+        seen = set()
+
+        # 1. GitHub User Search API (avatars + profile links)
+        try:
+            clean_q = re.sub(r"site:\S+", "", query).replace('"', "").strip() or query
+            gh_url = f"https://api.github.com/search/users?q={urllib.parse.quote(clean_q)}&per_page=10"
+            rgh = requests.get(gh_url, headers={"User-Agent": "DesertFox-OSINT/2.0"}, timeout=self.timeout)
+            if rgh.status_code == 200:
+                for u_obj in rgh.json().get("items", []):
+                    av = u_obj.get("avatar_url")
+                    html_u = u_obj.get("html_url")
+                    login = u_obj.get("login", "")
+                    if av and av not in seen:
+                        seen.add(av)
+                        items.append({
+                            "image_url": av,
+                            "thumb_url": av,
+                            "source_page_url": html_u or av,
+                            "title": f"{login} ({clean_q}) - GitHub",
+                            "domain": "github.com",
+                            "engine": "Brave",
+                        })
+        except Exception:
+            pass
+
+        # 2. Yandex Page 2 (p=1) portrait results with fast avatars.mds.yandex.net thumbnails
+        try:
+            y_url = f"https://yandex.com/images/search?text={urllib.parse.quote(query)}&itype=photo&p=1"
+            ry = requests.get(y_url, headers=self.headers, timeout=self.timeout)
+            if ry.status_code == 200:
+                for m in self._parse_yandex_html(ry.text, query, engine_label="Brave"):
+                    if m["image_url"] not in seen:
+                        seen.add(m["image_url"])
+                        items.append(m)
+                        if len(items) >= max_results:
+                            break
+        except Exception:
+            pass
+
+        return items[:max_results]
+
+    def _parse_yandex_html(self, body: str, query: str, engine_label: str = "Yandex") -> List[Dict[str, Any]]:
+        """Extracts Yandex serp-item entries including fast avatars.mds.yandex.net CDN thumb_urls."""
+        parsed: List[Dict[str, Any]] = []
+        seen_local = set()
+        bem_matches = re.findall(r"data-bem='(\{\"serp-item\":[^']+)'", body)
+        if not bem_matches:
+            bem_matches = re.findall(r'data-bem="(\{&quot;serp-item&quot;:[^"]+)"', body)
+
+        for raw_bem in bem_matches:
+            try:
+                data = json.loads(html.unescape(raw_bem))
+                serp = data.get("serp-item", {})
+                img_url = self._normalize_url(serp.get("img_href") or "")
+                if not img_url and serp.get("preview"):
+                    img_url = self._normalize_url(serp["preview"][0].get("url") or "")
+                thumb_obj = serp.get("thumb") or {}
+                thumb_url = self._normalize_url(thumb_obj.get("url") or "")
+                snippet = serp.get("snippet", {})
+                page_url = self._normalize_url(snippet.get("url") or img_url)
+                title = snippet.get("title", "") or snippet.get("text", "") or f"{query} - {engine_label}"
+                domain = snippet.get("domain") or self._extract_domain(page_url or img_url)
+                if img_url and img_url.startswith("http") and img_url not in seen_local:
+                    seen_local.add(img_url)
+                    entry = {
+                        "image_url": img_url,
+                        "source_page_url": page_url or img_url,
+                        "title": html.unescape(re.sub(r"<[^>]+>", "", str(title))),
+                        "domain": domain,
+                        "engine": engine_label,
+                    }
+                    if thumb_url:
+                        entry["thumb_url"] = thumb_url
+                    parsed.append(entry)
+            except Exception:
+                continue
+
+        if not parsed:
+            unesc = html.unescape(body)
+            mds_thumbs = [self._normalize_url(u) for u in re.findall(r'(?:https?:)?//avatars\.mds\.yandex\.net/i\?id=[^"\'\s&<>\\]+', unesc)]
+            href_matches = re.findall(r'"img_href"\s*:\s*"(https?://[^"]+)"', unesc)
+            for idx, raw_img in enumerate(href_matches):
+                img_url = self._normalize_url(raw_img)
+                if img_url and img_url not in seen_local:
+                    seen_local.add(img_url)
+                    entry = {
+                        "image_url": img_url,
+                        "source_page_url": img_url,
+                        "title": f"{query} - {engine_label} Images",
+                        "domain": self._extract_domain(img_url),
+                        "engine": engine_label,
+                    }
+                    if idx < len(mds_thumbs):
+                        entry["thumb_url"] = mds_thumbs[idx]
+                    parsed.append(entry)
+        return parsed
 
     def search_yandex_images(self, query: str, max_results: int = 40) -> List[Dict[str, Any]]:
         """
         Scrapes Yandex Images for global portrait coverage.
-        Extracts serp-item data-bem JSON structures containing origin image URLs and snippet links.
+        Extracts serp-item data-bem JSON structures containing origin image URLs,
+        fast avatars.mds.yandex.net CDN thumbnails, and snippet links.
         """
         results: List[Dict[str, Any]] = []
-        seen_local = set()
         try:
             url = f"https://yandex.com/images/search?text={urllib.parse.quote(query)}&itype=photo"
             resp = requests.get(url, headers=self.headers, timeout=self.timeout)
             if resp.status_code != 200:
                 return results
-
-            body = resp.text
-
-            # Pattern 1: data-bem='{"serp-item":...}'
-            bem_matches = re.findall(r"data-bem='(\{\"serp-item\":[^']+)'", body)
-            if not bem_matches:
-                bem_matches = re.findall(r'data-bem="(\{&quot;serp-item&quot;:[^"]+)"', body)
-
-            for raw_bem in bem_matches:
-                try:
-                    data = json.loads(html.unescape(raw_bem))
-                    serp = data.get("serp-item", {})
-                    img_url = self._normalize_url(serp.get("img_href") or "")
-                    if not img_url and serp.get("preview"):
-                        img_url = self._normalize_url(serp["preview"][0].get("url") or "")
-                    snippet = serp.get("snippet", {})
-                    page_url = self._normalize_url(snippet.get("url") or img_url)
-                    title = snippet.get("title", "") or snippet.get("text", "") or f"{query} - Yandex"
-                    domain = snippet.get("domain") or self._extract_domain(page_url or img_url)
-                    if img_url and img_url.startswith("http") and img_url not in seen_local:
-                        seen_local.add(img_url)
-                        results.append({
-                            "image_url": img_url,
-                            "source_page_url": page_url or img_url,
-                            "title": html.unescape(re.sub(r"<[^>]+>", "", str(title))),
-                            "domain": domain,
-                            "engine": "Yandex",
-                        })
-                        if len(results) >= max_results:
-                            return results
-                except Exception:
-                    continue
-
-            # Pattern 2: Direct img_href regex fallback
-            href_matches = re.findall(r'"img_href"\s*:\s*"(https?://[^"]+)"', html.unescape(body))
-            for raw_img in href_matches:
-                img_url = self._normalize_url(raw_img)
-                if img_url and img_url not in seen_local:
-                    seen_local.add(img_url)
-                    results.append({
-                        "image_url": img_url,
-                        "source_page_url": img_url,
-                        "title": f"{query} - Yandex Images",
-                        "domain": self._extract_domain(img_url),
-                        "engine": "Yandex",
-                    })
-                    if len(results) >= max_results:
-                        return results
+            results = self._parse_yandex_html(resp.text, query, engine_label="Yandex")
         except Exception as e:
             logger.warning("Yandex image search failed: %s", e)
 

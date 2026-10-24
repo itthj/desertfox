@@ -12,6 +12,8 @@ Coordinates:
 """
 
 import os
+import io
+import base64
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple
@@ -32,6 +34,7 @@ from desertfox.privacy.enrollment import FaceEnrollment
 from desertfox.ingestion.harvester import AdvancedHarvester
 from desertfox.ingestion.async_harvester import AsyncMediaHarvester
 from desertfox.ingestion.search_aggregator import SearchAggregator
+from desertfox.ingestion.visual_search import VisualSearchHarvester
 from desertfox.ingestion.dorker import OSINTDorker
 from desertfox.ingestion.seed_manager import SeedHubManager
 from desertfox.ingestion.video_harvester import VideoFrameHarvester, build_timestamp_deeplink, format_timestamp_hms
@@ -124,6 +127,7 @@ class DesertFoxEngine:
         self.harvester = AdvancedHarvester()
         self.async_harvester = AsyncMediaHarvester()
         self.search_aggregator = SearchAggregator()
+        self.visual_harvester = VisualSearchHarvester()
         self.video_harvester = VideoFrameHarvester()
         self.partitioned_index = PartitionedVectorIndex(embedding_dim=self.embedder.embedding_dim)
 
@@ -145,6 +149,17 @@ class DesertFoxEngine:
         if os.path.exists(self.vector_store_path):
             self.load_index(self.vector_store_path)
 
+    @staticmethod
+    def _encode_face_thumb(cropped: Image.Image) -> str:
+        """Encodes an aligned 112x112 face crop as a compact data-URI JPEG thumbnail for UI match cards."""
+        try:
+            thumb = cropped.convert("RGB").resize((88, 88), Image.Resampling.BILINEAR)
+            buf = io.BytesIO()
+            thumb.save(buf, format="JPEG", quality=76)
+            return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:
+            return ""
+
     def process_and_index_image(
         self,
         image: Image.Image,
@@ -153,12 +168,13 @@ class DesertFoxEngine:
         metadata: Optional[Dict[str, Any]] = None,
         enforce_fiqa: bool = True,
         only_enrolled: bool = False,
+        max_faces: int = 1,
     ) -> Dict[str, Any]:
         """
-        Validates quality with FIQA, detects & crops face, checks opt-out table,
-        extracts multi-hash fingerprint and 512-d embedding, and indexes the record.
+        Validates quality with FIQA, detects & crops face(s), checks opt-out table,
+        extracts multi-hash fingerprint and 512-d embedding, and indexes the record(s).
         """
-        meta = metadata or {}
+        meta = dict(metadata or {})
 
         # 1. Forensic EXIF & GPS Extraction
         forensics = ForensicMetadataExtractor.extract_exif(image)
@@ -193,6 +209,8 @@ class DesertFoxEngine:
         # 4. Face Image Quality Assessment (FIQA)
         fiqa = FaceQualityAssessment.evaluate_quality(cropped)
         meta["fiqa"] = fiqa
+        if "face_thumb" not in meta:
+            meta["face_thumb"] = self._encode_face_thumb(cropped)
 
         if enforce_fiqa and not fiqa["passed"]:
             return {
@@ -235,9 +253,30 @@ class DesertFoxEngine:
         if self.faiss_index is not None:
             self.faiss_index.add_record(record_id=record_id, vector=embedding, source_url=source_url, metadata=meta)
 
+        extra_faces_indexed = 0
+        if max_faces > 1 and len(faces) > 1 and not only_enrolled:
+            for f_idx, extra_face in enumerate(faces[1:max_faces], start=1):
+                try:
+                    ex_crop = self.detector.crop_and_align(image, extra_face)
+                    ex_emb = self.embedder.extract_from_pil(ex_crop)
+                    if self.optout_registry.is_excluded(ex_emb):
+                        continue
+                    ex_meta = dict(meta)
+                    ex_meta["face_index"] = f_idx
+                    ex_meta["face_thumb"] = self._encode_face_thumb(ex_crop)
+                    ex_id = f"{record_id}_f{f_idx}"
+                    self.vector_store.add(record_id=ex_id, vector=ex_emb, source_url=source_url, metadata=ex_meta)
+                    self.partitioned_index.add_record(record_id=ex_id, vector=ex_emb, source_url=source_url, metadata=ex_meta)
+                    if self.faiss_index is not None:
+                        self.faiss_index.add_record(record_id=ex_id, vector=ex_emb, source_url=source_url, metadata=ex_meta)
+                    extra_faces_indexed += 1
+                except Exception:
+                    continue
+
         return {
             "success": True,
             "record_id": record_id,
+            "faces_indexed": 1 + extra_faces_indexed,
             "fiqa_score": fiqa["overall_score"],
             "fingerprint": hashes["composite"]
         }
@@ -415,6 +454,8 @@ class DesertFoxEngine:
             meta = {
                 "source_domain": page_osint.get("domain", target_url),
                 "page_title": page_osint.get("page_title", ""),
+                "image_url": media["url"],
+                "thumb_url": media["url"],
                 "host_ip": page_osint.get("host_ip", "Unknown"),
                 "author": page_osint.get("author_or_entity", ""),
                 "forensics": media.get("forensics", {})
@@ -426,9 +467,10 @@ class DesertFoxEngine:
                 metadata=meta,
                 enforce_fiqa=False,
                 only_enrolled=only_enrolled,
+                max_faces=4,
             )
             if res.get("success"):
-                indexed_count += 1
+                indexed_count += int(res.get("faces_indexed", 1))
             elif res.get("other_face"):
                 skipped_other_faces += 1
 
@@ -565,6 +607,8 @@ class DesertFoxEngine:
             meta = {
                 "source_domain": item["domain"],
                 "source_page": source_page,
+                "image_url": img_url,
+                "thumb_url": item.get("thumb_url") or img_url,
                 "search_query": query,
                 "title": item["title"],
                 "engine": eng_name,
@@ -575,13 +619,15 @@ class DesertFoxEngine:
                 record_id=rec_id,
                 source_url=source_page,
                 metadata=meta,
-                enforce_fiqa=False
+                enforce_fiqa=False,
+                max_faces=4,
             )
             if res.get("success"):
-                indexed_count += 1
+                indexed_count += int(res.get("faces_indexed", 1))
                 indexed_items.append({
                     "record_id": rec_id,
-                    "image_url": img_url,
+                    "image_url": item.get("thumb_url") or img_url,
+                    "full_image_url": img_url,
                     "source_page": source_page,
                     "title": item["title"],
                     "domain": item["domain"],
@@ -600,6 +646,98 @@ class DesertFoxEngine:
             "newly_indexed_images": indexed_count,
             "items": indexed_items
         }
+
+    def visual_search_and_index_probe(
+        self,
+        probe_image: Image.Image,
+        query_hint: str = "",
+        max_results: int = 50,
+        top_k: int = 25,
+        threshold: float = 0.50,
+    ) -> Dict[str, Any]:
+        """
+        Reverse-image visual web discovery + biometric indexing + ArcFace similarity ranking:
+        1. Uploads the probe face crop to Yandex CBIR Visual Search (`rpt=imageview` + `&cbir_page=similar`)
+           and Bing Visual Search (`sbiupload`), plus optional entity-chained multi-engine search.
+        2. Downloads candidate thumbnails concurrently (`_parallel_fetch`).
+        3. Detects up to 4 faces per candidate image, embeds with ArcFace, and indexes into FAISS.
+        4. Runs biometric probe search (`search_probe_image`) and returns all matching faces with thumbnails.
+        """
+        faces = self.detector.detect_faces(probe_image)
+        if faces:
+            probe_crop = self.detector.crop_and_align(probe_image, faces[0])
+        else:
+            probe_crop = probe_image
+
+        discovery = self.visual_harvester.discover_from_probe(
+            probe_image=probe_crop,
+            query_hint=query_hint,
+            max_results=max_results,
+            search_aggregator=self.search_aggregator,
+        )
+        candidates = discovery.get("candidates", [])
+        fetched = self._parallel_fetch(candidates)
+
+        newly_indexed = 0
+        indexed_items: List[Dict[str, Any]] = []
+        for idx, (item, media) in enumerate(fetched):
+            if not media:
+                continue
+            eng_name = item.get("engine", "VisualSearch")
+            img_url = item["image_url"]
+            thumb_url = item.get("thumb_url") or img_url
+            source_page = item.get("source_page_url") or img_url
+            rec_id = f"vis_{media['fingerprint']['dhash'][:8]}_{idx}"
+            meta = {
+                "source_domain": item.get("domain", "visual-web"),
+                "source_page": source_page,
+                "image_url": img_url,
+                "thumb_url": thumb_url,
+                "page_title": item.get("title", "Reverse Image Discovery"),
+                "title": item.get("title", "Reverse Image Discovery"),
+                "engine": eng_name,
+                "search_query": query_hint or "reverse_image_probe",
+                "forensics": media.get("forensics", {}),
+            }
+            res = self.process_and_index_image(
+                image=media["image"],
+                record_id=rec_id,
+                source_url=source_page,
+                metadata=meta,
+                enforce_fiqa=False,
+                max_faces=4,
+            )
+            if res.get("success"):
+                faces_added = int(res.get("faces_indexed", 1))
+                newly_indexed += faces_added
+                indexed_items.append({
+                    "record_id": rec_id,
+                    "image_url": thumb_url,
+                    "full_image_url": img_url,
+                    "source_page": source_page,
+                    "title": item.get("title", ""),
+                    "domain": item.get("domain", ""),
+                    "engine": eng_name,
+                    "faces_indexed": faces_added,
+                })
+
+        if newly_indexed > 0:
+            self.partitioned_index.build_partitions()
+            self.save_index()
+
+        search_res = self.search_probe_image(
+            probe_image=probe_image,
+            top_k=top_k,
+            threshold=threshold,
+        )
+        search_res["visual_discovery"] = {
+            "candidates_discovered": len(candidates),
+            "newly_indexed_faces": newly_indexed,
+            "detected_tags": discovery.get("detected_tags", []),
+            "provider_counts": discovery.get("provider_counts", {}),
+            "discovered_items": indexed_items,
+        }
+        return search_res
 
     def dork_and_index_query(
         self,
@@ -658,6 +796,8 @@ class DesertFoxEngine:
                 meta = {
                     "source_domain": item["domain"],
                     "source_page": source_page,
+                    "image_url": img_url,
+                    "thumb_url": item.get("thumb_url") or img_url,
                     "search_query": query,
                     "dork": dork_str,
                     "category": category,
@@ -670,14 +810,17 @@ class DesertFoxEngine:
                     record_id=rec_id,
                     source_url=source_page,
                     metadata=meta,
-                    enforce_fiqa=False
+                    enforce_fiqa=False,
+                    max_faces=4,
                 )
                 if res.get("success"):
-                    dork_indexed += 1
-                    total_indexed += 1
+                    faces_added = int(res.get("faces_indexed", 1))
+                    dork_indexed += faces_added
+                    total_indexed += faces_added
                     all_indexed_items.append({
                         "record_id": rec_id,
-                        "image_url": img_url,
+                        "image_url": item.get("thumb_url") or img_url,
+                        "full_image_url": img_url,
                         "source_page": source_page,
                         "title": item["title"],
                         "category": category,

@@ -23,6 +23,7 @@ from desertfox.pipeline.engine import DesertFoxEngine
 from desertfox.privacy.takedown import TakedownNoticeGenerator
 from desertfox.ingestion.seed_manager import SeedHubManager, SeedScheduleRegistry
 from desertfox.ingestion.dorker import OSINTDorker
+from desertfox.queue.background_worker import BackgroundIndexWorker
 
 app = FastAPI(
     title="DesertFox OSINT & Exposure Engine",
@@ -30,11 +31,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Initialize Engine singleton
+# Initialize Engine singleton & In-Process Autonomous Background Worker
 engine = DesertFoxEngine(
     vector_store_path="./data/desertfox.index",
     optout_registry_path="./data/optout_registry.json"
 )
+bg_worker = BackgroundIndexWorker(lambda: engine)
+bg_worker.start()
 
 # Pydantic Request Models
 class SearchRequest(BaseModel):
@@ -127,6 +130,14 @@ class VideoSearchHarvestRequest(BaseModel):
     max_videos: int = Field(8, ge=1, le=25)
 
 
+class VisualDiscoverRequest(BaseModel):
+    image_base64: str = Field(..., description="Base64 encoded probe face image for reverse visual web discovery")
+    query_hint: Optional[str] = Field("", description="Optional target name or handle hint to enrich visual discovery")
+    max_results: int = Field(45, ge=5, le=150)
+    threshold: float = Field(0.50, ge=0.1, le=1.0)
+    top_k: int = Field(25, ge=1, le=50)
+
+
 def decode_base64_video_bytes(b64_str: str, max_bytes: int = 40 * 1024 * 1024) -> bytes:
     """Decodes a base64 or data-URI video payload with strict size bounds."""
     if not b64_str:
@@ -208,6 +219,77 @@ def search_probe(req: SearchRequest):
         raise _reject_unsafe(e)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Search failed: {str(e)}")
+
+
+@app.post("/api/search/visual-discover")
+def search_visual_discover(req: VisualDiscoverRequest):
+    """
+    Reverse-Image Visual Web Discovery + Auto-Indexing + Biometric Search:
+    Uploads the probe face photo to Yandex CBIR Visual Search (`rpt=imageview` + `&cbir_page=similar`),
+    Bing Visual Search (`sbiupload`), and optional entity-chained multi-engine search,
+    downloads candidate thumbnails concurrently, detects up to 4 faces per image,
+    indexes them into FAISS, and returns all matching face exposures.
+    """
+    try:
+        image, digest = decode_base64_payload(req.image_base64)
+        gate = engine.authorize_probe(image, digest)
+        if not gate["allowed"]:
+            raise HTTPException(status_code=403, detail={
+                "status": "rejected",
+                "message": gate.get("message") or "This photo does not match the enrolled face.",
+                "similarity": gate.get("similarity"),
+                "mode": gate.get("mode"),
+            })
+        results = engine.visual_search_and_index_probe(
+            probe_image=image,
+            query_hint=(req.query_hint or "").strip(),
+            max_results=req.max_results,
+            top_k=req.top_k,
+            threshold=req.threshold,
+        )
+        results["enrollment"] = {
+            "created": gate["created"],
+            "similarity": gate["similarity"],
+            "mode": gate["mode"],
+        }
+        return results
+    except HTTPException:
+        raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Visual discovery failed: {str(e)}")
+
+
+@app.post("/api/queue/visual-discover")
+def enqueue_visual_discover_job(req: VisualDiscoverRequest):
+    """Dispatches a reverse-image visual discovery & indexing job to the in-process background daemon."""
+    try:
+        image, digest = decode_base64_payload(req.image_base64)
+        gate = engine.authorize_probe(image, digest)
+        if not gate["allowed"]:
+            raise HTTPException(status_code=403, detail="Rejected by enrollment lock")
+        task_id = bg_worker.enqueue(
+            "visual_discover",
+            {
+                "probe_image": image,
+                "query_hint": (req.query_hint or "").strip(),
+                "max_results": req.max_results,
+                "threshold": req.threshold,
+                "top_k": req.top_k,
+            },
+        )
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "message": "Visual discovery job dispatched to background indexer daemon",
+        }
+    except HTTPException:
+        raise
+    except (PayloadTooLargeError, UnsafeURLError) as e:
+        raise _reject_unsafe(e)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to queue visual discovery: {str(e)}")
 
 
 @app.post("/api/search/multi-probe")
@@ -433,28 +515,40 @@ def crawl_website(req: CrawlRequest):
 
 @app.post("/api/queue/crawl")
 def enqueue_crawl_job(req: CrawlRequest):
-    """Dispatches a background web crawl job to the distributed Celery/Redis task queue."""
+    """Dispatches a background web crawl job to the autonomous background worker daemon."""
     try:
         validate_public_url(req.target_url)
     except UnsafeURLError as e:
         raise _reject_unsafe(e)
     try:
-        from desertfox.queue.tasks import crawl_and_index_task
-        task = crawl_and_index_task.delay(target_url=req.target_url, max_images=req.max_images)
+        task_id = bg_worker.enqueue("crawl", {"target_url": req.target_url, "max_images": req.max_images})
         return {
             "status": "queued",
-            "task_id": task.id,
+            "task_id": task_id,
             "target_url": req.target_url,
-            "message": "Harvesting job successfully dispatched to Celery worker queue"
+            "message": "Harvesting job dispatched to autonomous background worker"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue task: {str(e)}")
 
 
+@app.get("/api/queue/tasks")
+def list_background_tasks():
+    """Returns recent background indexing jobs and their real-time statuses."""
+    return {
+        "status": "success",
+        "tasks": bg_worker.list_tasks(limit=25),
+    }
+
+
 @app.get("/api/queue/task/{task_id}")
 def get_task_status(task_id: str):
-    """Queries status and telemetry for a distributed background harvesting task."""
+    """Queries status and telemetry for an in-process or Celery background harvesting task."""
     try:
+        bg_status = bg_worker.get_status(task_id)
+        if bg_status is not None:
+            return bg_status
+
         from desertfox.queue.celery_app import celery_app
         task = celery_app.AsyncResult(task_id)
         response = {
@@ -493,19 +587,21 @@ def harvest_search_query(req: SearchHarvestRequest):
 
 @app.post("/api/queue/search-harvest")
 def enqueue_search_harvest_job(req: SearchHarvestRequest):
-    """Dispatches a background web search & crawl job to the distributed Celery/Redis task queue."""
+    """Dispatches a background web search & crawl job to the autonomous background worker."""
     try:
-        from desertfox.queue.tasks import search_and_index_task
-        task = search_and_index_task.delay(
-            query=req.query,
-            max_results=req.max_results,
-            engines=req.engines
+        task_id = bg_worker.enqueue(
+            "search_harvest",
+            {
+                "query": req.query,
+                "max_results": req.max_results,
+                "engines": req.engines,
+            },
         )
         return {
             "status": "queued",
-            "task_id": task.id,
+            "task_id": task_id,
             "query": req.query,
-            "message": f"Automated search harvest job for '{req.query}' dispatched to Celery worker queue"
+            "message": f"Automated search harvest job for '{req.query}' dispatched to background worker"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue search harvest task: {str(e)}")
@@ -545,20 +641,23 @@ def dork_harvest_query(req: DorkHarvestRequest):
 
 @app.post("/api/queue/dork-harvest")
 def enqueue_dork_harvest_job(req: DorkHarvestRequest):
-    """Dispatches a background platform dorking harvest to the Celery worker queue."""
+    """Dispatches a background platform dorking harvest to the autonomous background worker."""
     try:
-        from desertfox.queue.tasks import dork_and_index_task
-        task = dork_and_index_task.delay(
-            query=req.query,
-            categories=req.categories,
-            max_per_dork=req.max_per_dork,
-            max_dorks=req.max_dorks
+        task_id = bg_worker.enqueue(
+            "dork_harvest",
+            {
+                "query": req.query,
+                "categories": req.categories,
+                "max_per_dork": req.max_per_dork,
+                "max_dorks": req.max_dorks,
+                "engines": req.engines,
+            },
         )
         return {
             "status": "queued",
-            "task_id": task.id,
+            "task_id": task_id,
             "query": req.query,
-            "message": f"Platform dorking task for '{req.query}' dispatched to Celery worker queue"
+            "message": f"Platform dorking task for '{req.query}' dispatched to background worker"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue dork harvest task: {str(e)}")
@@ -609,7 +708,7 @@ def bulk_crawl_seeds(req: BulkCrawlRequest):
 
 @app.post("/api/queue/bulk-crawl")
 def enqueue_bulk_crawl_job(req: BulkCrawlRequest):
-    """Dispatches bulk URL crawl to the Celery worker queue."""
+    """Dispatches bulk URL crawl to the autonomous background worker."""
     try:
         targets: List[str] = []
         if req.bundle_id:
@@ -625,16 +724,18 @@ def enqueue_bulk_crawl_job(req: BulkCrawlRequest):
         if not targets:
             raise HTTPException(status_code=400, detail="No valid target URLs provided or resolved.")
 
-        from desertfox.queue.tasks import bulk_crawl_urls_task
-        task = bulk_crawl_urls_task.delay(
-            urls=targets,
-            max_images_per_url=req.max_images_per_url
+        task_id = bg_worker.enqueue(
+            "bulk_crawl",
+            {
+                "urls": targets,
+                "max_images_per_url": req.max_images_per_url,
+            },
         )
         return {
             "status": "queued",
-            "task_id": task.id,
+            "task_id": task_id,
             "targets_count": len(targets),
-            "message": f"Bulk crawl task with {len(targets)} targets dispatched to Celery worker queue"
+            "message": f"Bulk crawl task with {len(targets)} targets dispatched to background worker"
         }
     except HTTPException:
         raise

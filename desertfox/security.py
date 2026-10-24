@@ -33,7 +33,14 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 from PIL import Image
+
+_ORIG_REQUESTS_GET = requests.get
+_HTTP_SESSION = requests.Session()
+_ADAPTER = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=0)
+_HTTP_SESSION.mount("https://", _ADAPTER)
+_HTTP_SESSION.mount("http://", _ADAPTER)
 
 MAX_REDIRECTS = 5
 MAX_PAGE_BYTES = 5 * 1024 * 1024        # 5 MiB for HTML pages
@@ -155,6 +162,10 @@ class SafeResponse:
         self._encoding = encoding
 
     @property
+    def body(self) -> bytes:
+        return self.content
+
+    @property
     def text(self) -> str:
         return self.content.decode(self._encoding or "utf-8", errors="replace")
 
@@ -174,9 +185,10 @@ def safe_get(
     Raises UnsafeURLError / PayloadTooLargeError / requests.RequestException.
     """
     current = url
+    getter = _HTTP_SESSION.get if requests.get is _ORIG_REQUESTS_GET else requests.get
     for _ in range(max_redirects + 1):
         validate_public_url(current)
-        resp = requests.get(current, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+        resp = getter(current, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
         try:
             if resp.status_code in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location")

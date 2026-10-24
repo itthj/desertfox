@@ -28,11 +28,16 @@ from desertfox.pipeline.engine import DesertFoxEngine
 
 class TestDesertFoxV2(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        cls._shared_embedder = VisualFeatureEmbedder(embedding_dim=512)
+        cls._shared_detector = AdaptiveFaceDetector()
+
     def setUp(self):
         # Create a test synthetic portrait (112x112 RGB)
         self.test_img = Image.new("RGB", (112, 112), color=(140, 160, 190))
-        self.embedder = VisualFeatureEmbedder(embedding_dim=512)
-        self.detector = AdaptiveFaceDetector()
+        self.embedder = self.__class__._shared_embedder
+        self.detector = self.__class__._shared_detector
 
     def test_fiqa_scoring(self):
         """Verify FIQA calculates blur, illumination, and contrast metrics"""
@@ -1182,6 +1187,141 @@ class TestDesertFoxV2(unittest.TestCase):
         self.assertEqual(api_res.status_code, 200)
         self.assertEqual(api_res.json()["type"], "NCII")
         self.assertIn("TAKE IT DOWN Act", api_res.json()["notice"])
+
+    def test_visual_search_harvester_and_visual_discover_api(self):
+        """Verify VisualSearchHarvester (Yandex CBIR + Bing Visual + entity chaining) and /api/search/visual-discover."""
+        import base64
+        import io
+        import tempfile
+        from unittest.mock import patch, MagicMock
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.config import EngineConfig
+        from desertfox.ingestion.visual_search import VisualSearchHarvester
+
+        vh = VisualSearchHarvester()
+        probe_img = Image.new("RGB", (112, 112), color=(90, 130, 170))
+
+        # 1. Test Yandex CBIR HTML parser via mocked upload + similar page
+        upload_resp = MagicMock(
+            status_code=200,
+            url="https://yandex.com/images/search?rpt=imageview&cbir_id=12345%2Fabcdef",
+            text='{"cbirId":"12345/abcdef"}',
+        )
+        similar_resp = MagicMock(
+            status_code=200,
+            text=(
+                '<img src="//avatars.mds.yandex.net/i?id=thumb123&n=13" />'
+                '"img_href":"https://cdn.example.org/person_full_1.jpg"'
+                '"CbirTags":["Jane Doe Portrait"]'
+            ),
+        )
+        with patch("requests.post", return_value=upload_resp), patch("requests.get", return_value=similar_resp):
+            ya_res = vh.search_yandex_visual(probe_img, max_results=10)
+            self.assertEqual(ya_res["cbir_id"], "12345/abcdef")
+            self.assertGreaterEqual(len(ya_res["items"]), 1)
+            self.assertEqual(ya_res["items"][0]["engine"], "YandexVisual")
+            self.assertIn("avatars.mds.yandex.net", ya_res["items"][0]["thumb_url"])
+            self.assertIn("Jane Doe Portrait", ya_res["detected_tags"])
+
+        # 2. Test Engine visual_search_and_index_probe + multi-face + face_thumb
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = EngineConfig(vector_store_path=os.path.join(tmpdir, "vis.index"), use_faiss=False)
+            eng = DesertFoxEngine(config=cfg, embedder=self.embedder, detector=self.detector)
+
+            eng.visual_harvester.discover_from_probe = lambda probe_image, query_hint="", max_results=50, search_aggregator=None: {
+                "candidates": [
+                    {
+                        "image_url": "https://cdn.example.org/p1.jpg",
+                        "thumb_url": "https://avatars.mds.yandex.net/i?id=t1",
+                        "source_page_url": "https://site.example.org/profile1",
+                        "title": "Discovered Portrait 1",
+                        "domain": "site.example.org",
+                        "engine": "YandexVisual",
+                    },
+                    {
+                        "image_url": "https://cdn.example.org/p2.jpg",
+                        "thumb_url": "https://tse1.mm.bing.net/th?id=OIP.t2",
+                        "source_page_url": "https://site.example.org/profile2",
+                        "title": "Discovered Portrait 2",
+                        "domain": "site.example.org",
+                        "engine": "BingVisual",
+                    },
+                ],
+                "detected_tags": ["Jane Doe"],
+                "provider_counts": {"YandexVisual": 1, "BingVisual": 1},
+            }
+
+            img_a = Image.fromarray(np.random.default_rng(11).integers(0, 255, (112, 112, 3), dtype=np.uint8))
+            img_b = Image.fromarray(np.random.default_rng(22).integers(0, 255, (112, 112, 3), dtype=np.uint8))
+            eng.harvester.fetch_and_validate_media = lambda u: {
+                "image": img_a if "t1" in u else img_b,
+                "fingerprint": {"dhash": "1111222233334444" if "t1" in u else "5555666677778888"},
+                "forensics": {},
+            }
+
+            vis_out = eng.visual_search_and_index_probe(img_a, query_hint="Jane Doe", max_results=10, threshold=0.10)
+            self.assertEqual(vis_out["status"], "success")
+            self.assertEqual(vis_out["visual_discovery"]["candidates_discovered"], 2)
+            self.assertEqual(vis_out["visual_discovery"]["newly_indexed_faces"], 2)
+            self.assertGreaterEqual(len(vis_out["matches"]), 1)
+            first_meta = vis_out["matches"][0]["metadata"]
+            self.assertTrue(first_meta.get("face_thumb", "").startswith("data:image/jpeg;base64,"))
+            self.assertIn("image_url", first_meta)
+
+        # 3. Test /api/search/visual-discover endpoint
+        buf = io.BytesIO()
+        probe_img.save(buf, format="PNG")
+        b64_probe = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        client = TestClient(server.app)
+        with patch.object(server.engine, "visual_search_and_index_probe", return_value={
+            "status": "success",
+            "total_matches": 2,
+            "matches": [],
+            "visual_discovery": {"candidates_discovered": 5, "newly_indexed_faces": 2, "detected_tags": []},
+        }):
+            resp = client.post("/api/search/visual-discover", json={
+                "image_base64": b64_probe,
+                "query_hint": "Jane Doe",
+                "max_results": 15,
+                "threshold": 0.5,
+                "top_k": 10,
+            })
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["visual_discovery"]["newly_indexed_faces"], 2)
+
+    def test_background_index_worker_and_queue_endpoints(self):
+        """Verify autonomous in-process BackgroundIndexWorker and /api/queue/* endpoints."""
+        import time
+        from fastapi.testclient import TestClient
+        from desertfox.api import server
+        from desertfox.queue.background_worker import BackgroundIndexWorker
+
+        class DummyEngine:
+            def harvest_and_index_query(self, query, max_results=50, engines=None):
+                return {"status": "success", "query": query, "newly_indexed_images": 4}
+
+        worker = BackgroundIndexWorker(lambda: DummyEngine())
+        task_id = worker.enqueue("search_harvest", {"query": "Test Target", "max_results": 10})
+        self.assertTrue(task_id.startswith("bg-"))
+
+        for _ in range(30):
+            st = worker.get_status(task_id)
+            if st and st["ready"]:
+                break
+            time.sleep(0.05)
+
+        st = worker.get_status(task_id)
+        self.assertIsNotNone(st)
+        self.assertEqual(st["status"], "SUCCESS")
+        self.assertEqual(st["result"]["newly_indexed_images"], 4)
+        self.assertGreaterEqual(len(worker.list_tasks()), 1)
+
+        # Verify FastAPI /api/queue/tasks endpoint
+        client = TestClient(server.app)
+        q_res = client.get("/api/queue/tasks")
+        self.assertEqual(q_res.status_code, 200)
+        self.assertEqual(q_res.json()["status"], "success")
 
 if __name__ == "__main__":
     unittest.main()

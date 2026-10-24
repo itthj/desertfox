@@ -175,6 +175,14 @@
 
                         <!-- Sensitivity & Search Controls -->
                         <div class="space-y-3 pt-2">
+                            <div class="space-y-1">
+                                <label class="text-[11px] mono text-slate-400">OPTIONAL IDENTITY / HANDLE HINT (FOR LIVE WEB VISUAL DISCOVERY)</label>
+                                <input type="text" id="probe-query-hint" placeholder="e.g. Full Name, @handle, or leave blank for pure reverse-face CBIR..." class="w-full bg-[#090d16] border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 mono focus:outline-none focus:border-cyan-500">
+                            </div>
+                            <label class="flex items-center space-x-2 text-[11px] mono text-slate-300 cursor-pointer">
+                                <input type="checkbox" id="auto-live-discover" checked class="accent-cyan-500 rounded">
+                                <span>Auto-discover & index live web photos (Yandex CBIR + Bing Visual + 6 engines) when local index has &lt;3 matches</span>
+                            </label>
                             <div class="flex items-center justify-between text-xs mono">
                                 <span class="text-slate-400">SIMILARITY THRESHOLD:</span>
                                 <span id="threshold-val" class="text-emerald-400 font-bold">60%</span>
@@ -187,11 +195,17 @@
                             </div>
                         </div>
 
-                        <!-- Search Button -->
-                        <button id="btn-search" onclick="executeSearch()" class="w-full py-3 rounded-lg font-bold text-xs mono bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all flex items-center justify-center space-x-2">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                            <span>INITIATE BIOMETRIC AUDIT SWEEP</span>
-                        </button>
+                        <!-- Search Buttons -->
+                        <div class="space-y-2">
+                            <button id="btn-search" onclick="executeSearch()" class="w-full py-3 rounded-lg font-bold text-xs mono bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all flex items-center justify-center space-x-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                <span>INITIATE BIOMETRIC AUDIT SWEEP</span>
+                            </button>
+                            <button id="btn-visual-discover" onclick="executeVisualDiscover()" class="w-full py-2.5 rounded-lg font-bold text-xs mono bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-[0_0_12px_rgba(6,182,212,0.25)] transition-all flex items-center justify-center space-x-2">
+                                <span>🌐</span>
+                                <span>DEEP WEB VISUAL DISCOVERY + AUTO-INDEX & MATCH</span>
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Privacy Advisory Box -->
@@ -1142,11 +1156,74 @@
                     renderResults({ status: 'rejected', message: message });
                     return;
                 }
+
+                const autoLive = document.getElementById('auto-live-discover') && document.getElementById('auto-live-discover').checked;
+                const hintVal = (document.getElementById('probe-query-hint')?.value || '').trim();
+                if (!currentProbes[0].isVideo && autoLive && ((data.matches || []).length < 3 || hintVal.length > 0)) {
+                    const visRes = await fetch('/api/search/visual-discover', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            image_base64: currentProbes[0].base64,
+                            query_hint: hintVal,
+                            max_results: 45,
+                            threshold: Math.min(threshold, 0.55),
+                            top_k: 25
+                        })
+                    });
+                    if (visRes.ok) {
+                        data = await visRes.json();
+                        fetchStats();
+                    }
+                }
                 renderResults(data);
             } catch (err) {
                 alert('Search failed: ' + err.message);
             } finally {
                 btn.disabled = false;
+                laserSweep.style.display = 'none';
+            }
+        }
+
+        async function executeVisualDiscover() {
+            if (currentProbes.length === 0 || currentProbes[0].isVideo) {
+                alert('Please upload a facial portrait photo first to run Deep Web Visual Discovery.');
+                return;
+            }
+            const btn = document.getElementById('btn-visual-discover');
+            const origHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳</span><span>REVERSE-SEARCHING YANDEX CBIR + BING VISUAL + 6 ENGINES...</span>';
+            laserSweep.style.display = 'block';
+
+            try {
+                const threshold = Math.min(parseFloat(slider.value), 0.55);
+                const hintVal = (document.getElementById('probe-query-hint')?.value || '').trim();
+                const res = await fetch('/api/search/visual-discover', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_base64: currentProbes[0].base64,
+                        query_hint: hintVal,
+                        max_results: 50,
+                        threshold: threshold,
+                        top_k: 25
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    const detail = data.detail || {};
+                    const message = typeof detail === 'string' ? detail : (detail.message || 'Visual discovery failed');
+                    renderResults({ status: 'rejected', message: message });
+                    return;
+                }
+                fetchStats();
+                renderResults(data);
+            } catch (err) {
+                alert('Visual discovery failed: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = origHtml;
                 laserSweep.style.display = 'none';
             }
         }
@@ -1209,6 +1286,23 @@
             detailPanel.classList.remove('hidden');
             detailBody.innerHTML = '<p class="text-slate-400">Select a match to inspect confidence, source domain, and metadata.</p>';
 
+            if (data.visual_discovery) {
+                const vd = data.visual_discovery;
+                const tagsHtml = (vd.detected_tags && vd.detected_tags.length)
+                    ? `<div class="text-[11px] mono text-amber-300 mt-1">🏷️ Detected Visual Entities: ${vd.detected_tags.join(' • ')}</div>`
+                    : '';
+                const banner = document.createElement('div');
+                banner.className = 'p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/40 text-xs mono text-cyan-200 space-y-1';
+                banner.innerHTML = `
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-bold text-cyan-300">🌐 LIVE REVERSE VISUAL DISCOVERY SUMMARY</span>
+                        <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">+${vd.newly_indexed_faces || 0} NEW FACES INDEXED (${vd.candidates_discovered || 0} CANDIDATES)</span>
+                    </div>
+                    ${tagsHtml}
+                `;
+                matchesGrid.appendChild(banner);
+            }
+
             matches.forEach((m, idx) => {
                 const card = document.createElement('div');
                 card.className = 'p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-emerald-500/40 transition-all space-y-3 cursor-pointer';
@@ -1217,7 +1311,7 @@
                 const simPercent = Math.round(m.similarity * 100);
                 const badgeColor = simPercent >= 78 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' : (simPercent >= 62 ? 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30' : 'text-amber-400 bg-amber-500/10 border-amber-500/30');
                 const meta = m.metadata || {};
-                const pageTitle = meta.page_title || meta.domain || 'Direct Image Source';
+                const pageTitle = meta.page_title || meta.title || meta.domain || 'Direct Image Source';
                 const hostIp = meta.host_ip ? ` • IP: ${meta.host_ip}` : '';
                 const author = meta.author ? ` • Author: ${meta.author}` : '';
                 const forensics = meta.forensics || {};
@@ -1228,13 +1322,20 @@
                 const isVideoMatch = meta.media_type === 'video';
                 const videoTimestamp = meta.timestamp_hms || '00:00';
                 const deepLink = meta.deep_link_url || m.source_url;
+                const thumbSrc = meta.face_thumb || meta.thumb_url || meta.image_url || meta.frame_image_url || '';
 
                 card.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
+                        ${thumbSrc ? `
+                            <div class="w-16 h-16 rounded-lg overflow-hidden border border-slate-700 bg-slate-950 shrink-0 relative">
+                                <img src="${thumbSrc}" alt="Matched Face #${idx + 1}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/88x88/090d16/10b981?text=FACE'">
+                            </div>
+                        ` : ''}
                         <div class="space-y-1.5 flex-1 min-w-0">
                             <div class="flex flex-wrap items-center gap-2">
                                 <span class="mono text-xs font-bold text-white">#${idx + 1} ${m.record_id}</span>
                                 <span class="mono text-[10px] px-2 py-0.5 rounded border ${badgeColor}">${simPercent}% SIMILARITY (${m.confidence})</span>
+                                ${meta.engine ? `<span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">${meta.engine}</span>` : ''}
                                 ${isVideoMatch ? `<span class="mono text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">🎬 VIDEO @ ${videoTimestamp}</span>` : ''}
                                 <span class="mono text-[10px] text-slate-400">L2: ${m.l2_distance || 'N/A'}</span>
                             </div>
@@ -1296,7 +1397,7 @@
 
             if (meta && Object.keys(meta).length > 0) {
                 Object.entries(meta).forEach(([key, value]) => {
-                    if (['page_title', 'author', 'host_ip', 'source_domain', 'forensics', 'fingerprint', 'domain'].includes(key)) return;
+                    if (['page_title', 'author', 'host_ip', 'source_domain', 'forensics', 'fingerprint', 'domain', 'face_thumb'].includes(key)) return;
                     metadataEntries.push([key, formatObject(value)]);
                 });
             }
@@ -1305,12 +1406,18 @@
                 ? metadataEntries.slice(0, 8).map(([label, value]) => `<div class="flex justify-between gap-3 border-b border-slate-800/60 pb-1"><span class="text-slate-500 mono">${label}</span><span class="text-right text-slate-200 break-all">${value}</span></div>`).join('')
                 : '<div class="text-slate-400">No extra metadata captured.</div>';
 
+            const detailThumb = meta.face_thumb || meta.thumb_url || meta.image_url || meta.frame_image_url || '';
+            const fullPhotoUrl = meta.image_url || meta.thumb_url || match.source_url;
+
             detailBody.innerHTML = `
                 <div class="space-y-3">
                     <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <div class="text-[10px] mono text-slate-400">${match.record_id}</div>
-                            <div class="text-sm font-semibold text-white">${pageTitle}</div>
+                        <div class="flex items-center gap-3">
+                            ${detailThumb ? `<a href="${fullPhotoUrl}" target="_blank"><img src="${detailThumb}" alt="Matched Face" class="w-16 h-16 rounded-lg object-cover border border-emerald-500/40"></a>` : ''}
+                            <div>
+                                <div class="text-[10px] mono text-slate-400">${match.record_id}</div>
+                                <div class="text-sm font-semibold text-white">${pageTitle}</div>
+                            </div>
                         </div>
                         <span class="px-2 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 mono text-[10px]">${match.calibrated_confidence || match.confidence || 'Confidence'}</span>
                     </div>
